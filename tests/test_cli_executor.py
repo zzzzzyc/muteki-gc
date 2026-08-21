@@ -1453,6 +1453,7 @@ def test_endpoint_healthcheck_resolves_file_backed_key(monkeypatch, tmp_path):
     handled env: refs and returned '' for file-backed → probe sent no auth header
     (false-negative health even though the live worker authenticates fine)."""
     seen = {}
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-openai-key")
 
     def fake_run(argv, **kwargs):
         seen["argv"] = argv
