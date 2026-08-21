@@ -60,10 +60,13 @@ run。
 只有以下任一条件成立才 `verified=True`：
 
 - `digit_checksum` 与规范化完整 DMM 坐标的所有数字之和一致；
-- `gc check` 的真实工具输出包含绑定到同一规范化坐标的成功 receipt。
+- Muteki host 亲自运行 `gc check`，并取得绑定到同一规范化坐标的成功结果；
+- operator 通过 `verify_coord` 确认图中已由 `gc_gate` 接受、有 witness 的既有
+  candidate。
 
 只有 verified 坐标进入共享结果投影和 Coordinator 结束条件。普通聊天、operator 指令、
-listing 文本和未经工具来源核验的 `ok=true` 均不能升级。
+listing 文本和未经工具来源核验的 `ok=true` 均不能升级。Operator 不能直接输入一个图中
+不存在的新坐标。
 
 ## 任务
 
@@ -114,9 +117,9 @@ listing 文本和未经工具来源核验的 `ok=true` 均不能升级。
 - 从 `autoGC` 迁移选择器和 GeoCheck MD5 captcha 逻辑；
 - 解析函数使用离线 HTML fixture；
 - Playwright 提交默认 headless，可 `--headed`；
-- 输出包含站点、规范化坐标、attempts 和不可伪造的进程内 receipt 字段；
-- worker 提交前 claim `verifier:geocheck@<gc_code>`，并复用
-  `verifier_rate_limited`。
+- 输出包含站点、规范化坐标、attempts 和 definitive 状态；
+- checker 由 Muteki host 启动，worker 自报 success 不具验证权；
+- host 按 challenge/checker 串行、去重提交，并复用 `verifier_rate_limited`。
 
 ### Task 6：会话 watchdog
 
@@ -134,6 +137,7 @@ listing 文本和未经工具来源核验的 `ok=true` 均不能升级。
 - Web 表单可直接输入 GC code 和可选骨架/checker 信息；
 - 用 `GCBQRNY`、`GCBNQ1V`、`GC71C4T` 中可访问且符合范围的题目做真实冒烟；
 - 至少一次完整 `dispatch → worker → submit-coord → gate → verified → finish`；
+- 没有 checksum/checker 的题目允许 operator 只确认既有 gated candidate；
 - 结果写入 `docs/GC_E2E.md`，不得记录答案之外的凭据。
 
 ## 测试与验收
