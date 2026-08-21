@@ -105,8 +105,8 @@ def _stable_request_id() -> str:
     )["request_id"]
 
 
-async def _drive_watch(statuses: list[Any], **kw: Any) -> RecordingBus:
-    bus = RecordingBus()
+async def _drive_watch(statuses: list[Any], bus: Any | None = None, **kw: Any) -> Any:
+    bus = RecordingBus() if bus is None else bus
     from muteki.solver.gc_session_watchdog import watch_gc_session
 
     i = {"n": 0}
@@ -406,6 +406,137 @@ async def test_fetcher_errors_are_transient() -> None:
     assert bus.events[0].payload["need"] == GC_NEED
 
 
+async def test_emit_errors_retry_without_premature_state_change() -> None:
+    expired = {"online": False, "error": "session_expired"}
+    recovered = {"online": True, "error": None}
+
+    class FlakyBus:
+        def __init__(self) -> None:
+            self.events: list[Event] = []
+            self.calls = 0
+
+        async def emit(self, event: Event) -> Event:
+            self.calls += 1
+            if self.calls in (1, 3):
+                raise RuntimeError("bus emit failed")
+            self.events.append(event)
+            return event
+
+    bus = await _drive_watch(
+        [expired, expired, recovered, recovered], bus=FlakyBus(),
+    )
+    types = [ev.event_type for ev in bus.events]
+    assert types == [EventType.HITL_REQUEST, EventType.HITL_RESOLVED]
+    assert bus.calls == 4
+
+
+async def test_watch_clamps_nonfinite_interval_to_default() -> None:
+    from muteki.solver.gc_session_watchdog import watch_gc_session
+
+    slept: list[float] = []
+
+    async def fetcher(_url: str) -> dict[str, Any]:
+        return {"online": True, "error": None}
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await watch_gc_session(
+            RecordingBus(),
+            run_id="r",
+            challenge_id="c",
+            fetcher=fetcher,
+            sleep=sleep,
+            interval_s=float("nan"),
+            request_timeout_s=float("inf"),
+        )
+    assert slept == [60.0]
+
+
+async def test_watch_clamps_nonfinite_request_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from muteki.solver import gc_session_watchdog as mod
+
+    seen: dict[str, float] = {}
+
+    async def fake_default(_url: str, timeout: float) -> dict[str, Any]:
+        seen["timeout"] = timeout
+        return {"online": True, "error": None}
+
+    monkeypatch.setattr(mod, "_default_fetch", fake_default)
+
+    async def sleep(_seconds: float) -> None:
+        raise asyncio.CancelledError
+
+    with pytest.raises(asyncio.CancelledError):
+        await mod.watch_gc_session(
+            RecordingBus(),
+            run_id="r",
+            challenge_id="c",
+            fetcher=None,
+            sleep=sleep,
+            interval_s=1.0,
+            request_timeout_s=float("nan"),
+        )
+    assert seen["timeout"] == 5.0
+
+
+def test_fetch_status_sync_disables_proxy_and_rejects_redirects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import urllib.error
+    import urllib.request
+
+    from muteki.solver.gc_session_watchdog import _fetch_status_sync
+
+    built: dict[str, Any] = {}
+
+    class DummyResp:
+        def read(self, _n: int) -> bytes:
+            return b'{"online": true, "error": null}'
+
+        def __enter__(self) -> DummyResp:
+            return self
+
+        def __exit__(self, *_a: Any) -> bool:
+            return False
+
+    class DummyOpener:
+        def open(self, req: Any, timeout: float | None = None) -> DummyResp:
+            built["opened"] = getattr(req, "full_url", req)
+            built["timeout"] = timeout
+            return DummyResp()
+
+    def capture_build(*handlers: Any) -> DummyOpener:
+        built["handlers"] = handlers
+        return DummyOpener()
+
+    monkeypatch.setattr(urllib.request, "build_opener", capture_build)
+    monkeypatch.setattr(
+        urllib.request, "urlopen",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("must not use global urlopen")),
+    )
+
+    data = _fetch_status_sync("http://127.0.0.1:8765/api/status", 5.0)
+    assert data == {"online": True, "error": None}
+    handlers = built["handlers"]
+    proxy = next(h for h in handlers if isinstance(h, urllib.request.ProxyHandler))
+    assert dict(getattr(proxy, "proxies", {})) == {}
+    redir = next(
+        h for h in handlers if isinstance(h, urllib.request.HTTPRedirectHandler)
+    )
+    req = urllib.request.Request("http://127.0.0.1:8765/api/status")
+    location = "http://evil.example/steal"
+    with pytest.raises(urllib.error.HTTPError):
+        redir.redirect_request(
+            req, None, 302, "Found", {"Location": location}, location,
+        )
+    assert "evil.example" not in str(built.get("opened", ""))
+
+
 async def test_cancellation_propagates_immediately() -> None:
     from muteki.solver.gc_session_watchdog import watch_gc_session
 
@@ -515,6 +646,33 @@ async def test_coordinator_clamps_poll_interval_and_forwards_status_url(
     await asyncio.wait_for(sw._run_coordinator(), timeout=3)
     assert captured.get("interval_s", 0) >= 1
     assert captured.get("status_url") == "http://127.0.0.1:9999/api/status"
+
+
+async def test_coordinator_clamps_nonfinite_poll_interval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_watch(*_a: Any, **kw: Any) -> None:
+        captured.update(kw)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(
+        "muteki.swarm.coordinator_loop.watch_gc_session",
+        fake_watch,
+        raising=False,
+    )
+    monkeypatch.setenv("MUTEKI_GC_SESSION_POLL_INTERVAL", "inf")
+    bus = EventBus()
+    sw = _swarm(_challenge("geocache"), tmp_path, bus=bus)
+
+    async def health() -> list[str]:
+        return []
+
+    monkeypatch.setattr(sw, "_healthy_engines_async", health)
+    await asyncio.wait_for(sw._run_coordinator(), timeout=3)
+    interval = float(captured.get("interval_s"))
+    assert interval == 60.0
 
 
 # ── Coordinator cancel + await on every exit ────────────────────────────────
@@ -634,14 +792,22 @@ async def test_watchdog_exception_does_not_crash_coordinator(
     )
     bus = EventBus()
     sw = _swarm(_challenge("geocache"), tmp_path, bus=bus)
+    kinds: list[str] = []
+    real_emit = sw._emit_coord_bb
+
+    async def spy_emit(kind: str, **fields: Any) -> None:
+        kinds.append(kind)
+        await real_emit(kind, **fields)
 
     async def none_healthy() -> list[str]:
         await asyncio.sleep(0.05)
         return []
 
+    monkeypatch.setattr(sw, "_emit_coord_bb", spy_emit)
     monkeypatch.setattr(sw, "_healthy_engines_async", none_healthy)
     outcome = await asyncio.wait_for(sw._run_coordinator(), timeout=3)
     assert "NoEligibleEngine" in outcome.reason
+    assert "gc_session_watchdog_failed" in kinds
 
 
 def _async_list(value: list[str]):
@@ -691,6 +857,11 @@ async def test_help_sink_removes_exact_pending_request_and_wakes(
         assert {h["request_id"] for h in sw._pending_help} == {
             keep["request_id"], gc_payload["request_id"],
         }
+        gc_row = next(
+            h for h in sw._pending_help
+            if h["request_id"] == gc_payload["request_id"]
+        )
+        assert gc_row["need_kind"] == "external_blocker"
         sw._operator_paused = True
         assert sw._operator_event is not None
         sw._operator_event.clear()
@@ -707,7 +878,9 @@ async def test_help_sink_removes_exact_pending_request_and_wakes(
         )
         assert [h["request_id"] for h in sw._pending_help] == [keep["request_id"]]
         assert sw._operator_paused is True
-        assert sw._operator_event.is_set()
+        assert not sw._operator_event.is_set(), (
+            "partial resolve must not wake/unfreeze while other blockers remain"
+        )
 
         sw._operator_event.clear()
         await asyncio.wait_for(
@@ -769,7 +942,66 @@ async def test_help_sink_keeps_pause_when_control_frozen(
         )
         assert sw._pending_help == []
         assert sw._operator_paused is True
-        assert sw._operator_event.is_set()
+        assert not sw._operator_event.is_set(), (
+            "control-frozen full resolve must not open a resume window"
+        )
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def test_guoqi_is_not_a_global_blocker_keyword() -> None:
+    import inspect
+
+    from muteki.swarm.swarm import Swarm
+
+    src = inspect.getsource(Swarm._mechanical_need_kind)
+    assert "过期" not in src
+    generic = "请处理过期问题后再继续"
+    assert Swarm._mechanical_need_kind(generic) == "worker_uncertainty"
+    assert Swarm._rechecked_need_kind(generic, "external_blocker") == "worker_uncertainty"
+    assert Swarm._mechanical_need_kind("instance expired") == "external_blocker"
+
+
+async def test_help_sink_trusts_watchdog_blocker_but_not_generic_guoqi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_hanging_watch(monkeypatch)
+    bus = EventBus()
+    sw = _swarm(_challenge("geocache"), tmp_path, bus=bus)
+    ready = asyncio.Event()
+
+    async def hang_health() -> list[str]:
+        ready.set()
+        await asyncio.Event().wait()
+        return []
+
+    monkeypatch.setattr(sw, "_healthy_engines_async", hang_health)
+    task = asyncio.create_task(sw._run_coordinator())
+    await asyncio.wait_for(ready.wait(), timeout=2)
+    try:
+        gc_payload = hitl_request_payload(
+            GC_WORKER, GC_NEED, kind=GC_KIND, need_kind=GC_NEED_KIND,
+        )
+        generic = hitl_request_payload(
+            "cli-claude", "请处理过期问题后再继续",
+            kind="need_input", need_kind="external_blocker",
+        )
+        await bus.emit(Event(
+            event_type=EventType.HITL_REQUEST, run_id=sw.run_id, payload=gc_payload,
+        ))
+        await bus.emit(Event(
+            event_type=EventType.HITL_REQUEST, run_id=sw.run_id, payload=generic,
+        ))
+        pending_ids = [h["request_id"] for h in sw._pending_help]
+        assert gc_payload["request_id"] in pending_ids
+        gc_row = next(h for h in sw._pending_help if h["request_id"] == gc_payload["request_id"])
+        assert gc_row["need_kind"] == "external_blocker"
+        assert generic["request_id"] not in pending_ids
+        assert any(
+            str(row.get("need", "")).startswith("请处理过期")
+            for row in sw._pending_uncertainty_reviews
+        )
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

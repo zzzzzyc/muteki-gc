@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -20,6 +21,9 @@ from muteki.core.events import (
 )
 
 DEFAULT_STATUS_URL = "http://127.0.0.1:8765/api/status"
+_DEFAULT_INTERVAL_S = 60.0
+_MIN_INTERVAL_S = 1.0
+_DEFAULT_TIMEOUT_S = 5.0
 _MAX_BODY = 64 * 1024
 _WORKER = "gc-session-watchdog"
 _NEED = "Geocaching 会话已过期，请运行 gc auth login"
@@ -62,6 +66,42 @@ def validate_gc_status_url(url: str) -> str:
     return url
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow Location; never open the redirect target."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        raise urllib.error.HTTPError(
+            req.full_url, code, "redirect rejected", headers, fp,
+        )
+
+
+def _status_opener() -> urllib.request.OpenerDirector:
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _RejectRedirects(),
+    )
+
+
+def _clamp_interval(value: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_INTERVAL_S
+    if not math.isfinite(number):
+        return _DEFAULT_INTERVAL_S
+    return max(_MIN_INTERVAL_S, number)
+
+
+def _clamp_timeout(value: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_TIMEOUT_S
+    if not math.isfinite(number) or number <= 0:
+        return _DEFAULT_TIMEOUT_S
+    return number
+
+
 def _status_fields(data: Any) -> tuple[Any, Any] | None:
     if not isinstance(data, dict):
         return None
@@ -81,7 +121,7 @@ def _fetch_status_sync(url: str, timeout: float) -> dict[str, Any]:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as resp:
+        with _status_opener().open(request, timeout=timeout) as resp:
             raw = resp.read(_MAX_BODY + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise TimeoutError("gc status poll failed") from exc
@@ -112,6 +152,8 @@ async def watch_gc_session(
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
     status_url = validate_gc_status_url(status_url)
+    interval_s = _clamp_interval(interval_s)
+    request_timeout_s = _clamp_timeout(request_timeout_s)
     request = hitl_request_payload(
         _WORKER, _NEED, kind=_KIND, need_kind=_NEED_KIND,
     )
@@ -136,29 +178,35 @@ async def watch_gc_session(
             await sleep(interval_s)
             continue
         online, error = fields
-        if online is False and error == "session_expired":
-            if not expired:
-                expired = True
+        try:
+            if online is False and error == "session_expired":
+                if not expired:
+                    await bus.emit(
+                        Event(
+                            event_type=EventType.HITL_REQUEST,
+                            run_id=run_id,
+                            challenge_id=challenge_id,
+                            solver_id=_WORKER,
+                            payload=request,
+                        )
+                    )
+                    expired = True
+            elif online is True and expired:
                 await bus.emit(
                     Event(
-                        event_type=EventType.HITL_REQUEST,
+                        event_type=EventType.HITL_RESOLVED,
                         run_id=run_id,
                         challenge_id=challenge_id,
                         solver_id=_WORKER,
-                        payload=request,
+                        payload=hitl_resolved_payload(
+                            request_id, worker=_WORKER, reason=_RECOVERED,
+                        ),
                     )
                 )
-        elif online is True and expired:
-            expired = False
-            await bus.emit(
-                Event(
-                    event_type=EventType.HITL_RESOLVED,
-                    run_id=run_id,
-                    challenge_id=challenge_id,
-                    solver_id=_WORKER,
-                    payload=hitl_resolved_payload(
-                        request_id, worker=_WORKER, reason=_RECOVERED,
-                    ),
-                )
-            )
+                expired = False
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await sleep(interval_s)
+            continue
         await sleep(interval_s)

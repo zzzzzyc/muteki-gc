@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
 from dataclasses import dataclass, field
@@ -126,8 +127,8 @@ class _CoordinatorLoopMixin:
                         ]
                     if not self._pending_help and not self._control_frozen:
                         self._operator_paused = False
-                    if self._operator_event is not None:
-                        self._operator_event.set()
+                        if self._operator_event is not None:
+                            self._operator_event.set()
                     try:
                         asyncio.create_task(self._emit_coord_bb(
                             "hitl_resolved",
@@ -150,7 +151,11 @@ class _CoordinatorLoopMixin:
                     need_kind = str(payload.get("need_kind") or "external_blocker")
                     need_text = str(payload.get("need", "")).strip()
                     worker = str(payload.get("worker", ""))
-                    need_kind = self._rechecked_need_kind(need_text, need_kind)
+                    if not (
+                        worker == "gc-session-watchdog"
+                        and need_kind == "external_blocker"
+                    ):
+                        need_kind = self._rechecked_need_kind(need_text, need_kind)
                     payload["need_kind"] = need_kind
                     # F: persist the classification (need_kind) so the deck can render
                     # auto-resolving kinds differently from a true operator blocker,
@@ -311,6 +316,8 @@ class _CoordinatorLoopMixin:
             try:
                 interval_s = float(raw_interval)
             except (TypeError, ValueError):
+                interval_s = 60.0
+            if not math.isfinite(interval_s):
                 interval_s = 60.0
             interval_s = max(1.0, interval_s)
             status_url = (
