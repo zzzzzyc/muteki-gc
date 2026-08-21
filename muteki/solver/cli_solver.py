@@ -53,6 +53,7 @@ from muteki.solver.gate import (
     is_placeholder_flag,
     parse_finding_claim,
 )
+from muteki.solver.gc_gate import coord_ok as _gate_coord_ok
 from muteki.solver.vuln_report import (
     VERIFIER_PROMPT as _VERIFIER_PROMPT,
     _PENTEST_REPORT_BLOCK,
@@ -1114,6 +1115,7 @@ class CliSolver:
         # flag_submission; only candidates consumed and provenance-validated by this
         # Worker may reach _accept_flag.  Plain FOUND_FLAG text remains diagnostic.
         self._validated_flag_submissions: set[str] = set()
+        self._validated_coord_submissions: set[str] = set()
         self._last_flag_submission_seq = 0
         self._flag_submission_dir: "Optional[Path]" = None
         if self.shared_graph is not None:
@@ -3257,6 +3259,7 @@ class CliSolver:
         sg = getattr(self, "shared_graph", None)
         if sg is None or bool(getattr(self, "_protocol2_mode", False)):
             return
+        is_geocache = self.challenge.mode == "geocache"
         queued: list[dict[str, Any]] = []
         request_dir = self._flag_submission_dir
         if request_dir is not None:
@@ -3279,24 +3282,28 @@ class CliSolver:
                         raise ValueError("submission actor does not own this Worker")
                     if str(payload.get("protocol") or "") != "blackboard-api-v1":
                         raise ValueError("unsupported submission protocol")
-                    flag = str(payload.get("flag") or "").strip()
                     intent_id = str(payload.get("intent_id") or "")
-                    submission_seq = sg.flag_submission(
-                        actor=self.solver_id,
-                        submission_id=submission_id,
-                        flag=flag,
-                        intent_id=intent_id or None,
-                    )
-                    queued.append({
-                        "seq": max(0, int(submission_seq or 0)),
-                        "actor": self.solver_id,
-                        "payload": {
-                            "submission_id": submission_id,
-                            "flag": flag,
-                            "intent_id": intent_id,
-                            "protocol": "blackboard-api-v1",
-                        },
-                    })
+                    if is_geocache:
+                        queued.append(self._queue_geocache_submission(
+                            sg, payload, submission_id, intent_id))
+                    else:
+                        flag = str(payload.get("flag") or "").strip()
+                        submission_seq = sg.flag_submission(
+                            actor=self.solver_id,
+                            submission_id=submission_id,
+                            flag=flag,
+                            intent_id=intent_id or None,
+                        )
+                        queued.append({
+                            "seq": max(0, int(submission_seq or 0)),
+                            "actor": self.solver_id,
+                            "payload": {
+                                "submission_id": submission_id,
+                                "flag": flag,
+                                "intent_id": intent_id,
+                                "protocol": "blackboard-api-v1",
+                            },
+                        })
                 except Exception as exc:
                     await self._emit_bb(
                         "flag_submission_rejected",
@@ -3330,6 +3337,9 @@ class CliSolver:
                 continue
             payload = dict(row.get("payload") or {})
             submission_id = str(payload.get("submission_id") or f"seq-{seq}")
+            if is_geocache:
+                await self._decide_geocache_submission(sg, payload, submission_id)
+                continue
             flag = str(payload.get("flag") or "").strip()
             try:
                 accepted = bool(
@@ -3367,6 +3377,105 @@ class CliSolver:
                     submission_id=submission_id,
                     reason=detail,
                 )
+
+    def _queue_geocache_submission(
+        self, sg: Any, payload: dict[str, Any], submission_id: str, intent_id: str,
+    ) -> dict[str, Any]:
+        coord = str(payload.get("coord") or "").strip()
+        submission_kind = str(payload.get("submission_kind") or "")
+        flag = str(payload.get("flag") or "").strip()
+        submission_seq = sg.flag_submission(
+            actor=self.solver_id,
+            submission_id=submission_id,
+            flag=flag,
+            coord=coord,
+            submission_kind=submission_kind or "flag",
+            intent_id=intent_id or None,
+        )
+        return {
+            "seq": max(0, int(submission_seq or 0)),
+            "actor": self.solver_id,
+            "payload": {
+                "submission_id": submission_id,
+                "coord": coord,
+                "submission_kind": submission_kind,
+                "flag": flag,
+                "intent_id": intent_id,
+                "protocol": "blackboard-api-v1",
+            },
+        }
+
+    async def _decide_geocache_submission(
+        self, sg: Any, payload: dict[str, Any], submission_id: str,
+    ) -> None:
+        coord = str(payload.get("coord") or "").strip()
+        kind = str(payload.get("submission_kind") or "")
+        flag = str(payload.get("flag") or "").strip()
+        coord_text = ""
+        reason = ""
+        verified = False
+        if kind != "coord" or not coord or flag:
+            accepted = False
+            code = "coord_rejected"
+            detail = "geocache 模式仅接受 submit-coord 坐标载荷"
+        else:
+            try:
+                verdict = _gate_coord_ok(
+                    coord, self.challenge, self._provenance_corpus())
+                accepted = bool(verdict.accepted)
+                verified = bool(verdict.verified)
+                coord_text = str(verdict.coord_text or "")
+                reason = str(verdict.reason or "")
+                if not accepted:
+                    code = "coord_rejected"
+                elif verified:
+                    code = "coord_verified"
+                else:
+                    code = "coord_candidate"
+                detail = reason
+            except Exception as exc:
+                accepted = False
+                verified = False
+                coord_text = ""
+                code = "coord_rejected"
+                detail = (
+                    "坐标校验失败: "
+                    f"{type(exc).__name__}: {str(exc)[:160]}"
+                )
+        try:
+            sg.flag_submission_decision(
+                actor=self.solver_id,
+                submission_id=submission_id,
+                accepted=accepted,
+                code=code,
+                detail=detail,
+            )
+        except Exception:
+            pass
+        if accepted and verified:
+            self._validated_coord_submissions.add(coord_text)
+            if await self._accept_coordinate(coord_text):
+                self._stream_accepted.append(coord_text)
+            return
+        if accepted:
+            try:
+                sg.add_evidence(
+                    actor=self.solver_id,
+                    source="gc_gate",
+                    fact=f"坐标候选 {coord_text}",
+                    verified=False,
+                    witness=reason or detail,
+                )
+            except Exception:
+                pass
+            await self._emit_bb(
+                "coord_candidate", coord=coord_text, reason=reason or detail)
+            return
+        await self._emit_bb(
+            "flag_submission_rejected",
+            submission_id=submission_id,
+            reason=detail,
+        )
 
     async def _maybe_broadcast_lockout(self, text: str) -> None:
         """Parse a cooldown/burn-lockout duration out of verifier output and, if it
@@ -7036,6 +7145,56 @@ class CliSolver:
         if self.insight is not None:
             try:
                 await self.insight.flag_found(self.solver_id, flag)
+            except Exception:
+                pass
+        return True
+
+    async def _accept_coordinate(self, coord: str) -> bool:
+        """Record one checksum-verified coordinate on the existing flag projection.
+
+        Separate from ``_accept_flag``: never consults ``_flag_ok`` or the Flag
+        submission set. Dedup and durable operator rejection are at least as
+        strict as ``_accept_flag``. Only verified coordinates may call this.
+        """
+        if not coord or coord in self._already_found:
+            return False
+        if (not bool(getattr(self, "_protocol2_mode", False))
+                and coord not in self._validated_coord_submissions):
+            key = ("COORD_API_REQUIRED", coord[:200])
+            if key not in self._published_markers:
+                self._published_markers.add(key)
+                await self._emit_bb(
+                    "flag_submission_required",
+                    reason=("Coordinate text was observed but no validated "
+                            "muteki-blackboard submit-coord request exists"),
+                )
+            return False
+        if coord in self._rejected_flags():
+            await self._emit_bb(
+                "flag_reaccept_blocked", flag=coord,
+                reason="operator marked this coordinate false-positive; permanently rejected")
+            return False
+        self._already_found.add(coord)
+        if bool(getattr(self, "_protocol2_mode", False)):
+            self._protocol2_accepted_flags.append(coord)
+            return True
+        self.graph.add_flag(coord)
+        if self.shared_graph is not None:
+            try:
+                self.shared_graph.flag_found(
+                    actor=self.solver_id, flag=coord,
+                    intent_id=getattr(self, "_intent_id", "") or None)
+            except Exception:
+                pass
+        await self._emit(EventType.SOLVE_GRAPH_DELTA,
+                         **solve_graph_delta_payload("flag", flag=coord))
+        await self._emit(EventType.INSIGHT_BUS_EVENT,
+                         **insight_payload("FlagFound", flag=coord, by=self.solver_id))
+        await self._emit_bb("flag_found", flag=coord)
+        await self._emit_bb("coord_found", coord=coord)
+        if self.insight is not None:
+            try:
+                await self.insight.flag_found(self.solver_id, coord)
             except Exception:
                 pass
         return True

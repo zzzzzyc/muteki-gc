@@ -131,8 +131,10 @@ class SharedGraph(Protocol):
                    intent_id: Optional[str] = None) -> int: ...
 
     def flag_submission(
-        self, *, actor: str, submission_id: str, flag: str,
+        self, *, actor: str, submission_id: str, flag: str = "",
         intent_id: Optional[str] = None,
+        submission_kind: str = "flag",
+        coord: str = "",
     ) -> int: ...
 
     def flag_submission_decision(

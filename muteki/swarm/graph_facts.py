@@ -187,16 +187,31 @@ class _FactsMixin:
                             dedupe_key=f"flag::{flag}")
 
     def flag_submission(
-        self, *, actor: str, submission_id: str, flag: str,
+        self, *, actor: str, submission_id: str, flag: str = "",
         intent_id: Optional[str] = None,
+        submission_kind: str = "flag",
+        coord: str = "",
     ) -> int:
-        """Record one unverified Worker API request through the host DB owner."""
-        payload = {
-            "submission_id": str(submission_id),
-            "flag": str(flag),
-            "intent_id": str(intent_id or ""),
-            "protocol": "blackboard-api-v1",
-        }
+        """Record one unverified Worker API request through the host DB owner.
+
+        Default Flag submissions keep the historical payload keys. Coordinate
+        submissions add ``submission_kind`` and ``coord`` and omit ``flag``.
+        """
+        if str(submission_kind or "flag") != "flag":
+            payload = {
+                "submission_id": str(submission_id),
+                "coord": str(coord),
+                "intent_id": str(intent_id or ""),
+                "protocol": "blackboard-api-v1",
+                "submission_kind": str(submission_kind),
+            }
+        else:
+            payload = {
+                "submission_id": str(submission_id),
+                "flag": str(flag),
+                "intent_id": str(intent_id or ""),
+                "protocol": "blackboard-api-v1",
+            }
         return self._append(
             EV_FLAG_SUBMISSION,
             actor,

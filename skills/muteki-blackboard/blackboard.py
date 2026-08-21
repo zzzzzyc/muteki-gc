@@ -21,6 +21,7 @@ Usage:
   blackboard.py write-fact "<text>" [--verified]
   blackboard.py mark-deadend "<reason>"
   blackboard.py submit-flag '<flag>'             # the only Flag submission API
+  blackboard.py submit-coord '<candidate>'       # geocache coordinate candidate API
   blackboard.py claim <intent_id>              # atomic; prints WON or LOST
 
 This script is intentionally dependency-free (stdlib sqlite3 only) so it runs in
@@ -210,6 +211,53 @@ def submit_flag(flag: str) -> None:
         raise
     # Do not echo the candidate. Tool output from the submission call must never
     # become evidence for its own payload.
+    print(f"SUBMITTED {submission_id}; awaiting provenance validation")
+
+
+def submit_coord(coord: str) -> None:
+    """Submit one coordinate candidate to the owning Worker for local validation.
+
+    Same atomic spool, id format, protocol, limits, and no-echo contract as
+    ``submit_flag``. Payload uses ``coord`` + ``submission_kind`` and never sets
+    ``flag``, so a CTF worker cannot treat this request as a Flag submission.
+    """
+
+    value = str(coord or "").strip()
+    if not value or len(value) > 1024 or any(ord(ch) < 32 for ch in value):
+        print("ERROR: coord must be one non-empty line (maximum 1024 characters)",
+              file=sys.stderr)
+        sys.exit(2)
+    submission_id = f"fs-{uuid.uuid4().hex[:16]}"
+    request_dir = os.environ.get("MUTEKI_FLAG_SUBMISSION_DIR", "").strip()
+    if not request_dir:
+        print("ERROR: the owning Worker did not provide a Flag submission ingress",
+              file=sys.stderr)
+        sys.exit(2)
+    os.makedirs(request_dir, mode=0o700, exist_ok=True)
+    request = {
+        "submission_id": submission_id,
+        "coord": value,
+        "submission_kind": "coord",
+        "intent_id": _INTENT_ID,
+        "actor": _ACTOR,
+        "protocol": "blackboard-api-v1",
+        "created_at": time.time(),
+    }
+    fd, temporary = tempfile.mkstemp(
+        prefix=f".{submission_id}-", suffix=".tmp", dir=request_dir)
+    final_path = os.path.join(request_dir, f"{submission_id}.json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(request, handle, ensure_ascii=False, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, final_path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
     print(f"SUBMITTED {submission_id}; awaiting provenance validation")
 
 
@@ -990,6 +1038,7 @@ TEAMMATE_ALLOWED_CMDS = frozenset({
     "list-intents", "read-flags", "read-resource-locks", "read-deadends",
     "read-review",
     "submit-flag",
+    "submit-coord",
 })
 _TEAM_CHANNEL_KINDS = frozenset({"evidence", "dead_end", "surprise", "request_help"})
 _TEAM_MSG_KINDS = frozenset({
@@ -1448,6 +1497,9 @@ def main() -> None:
     p = _reg("submit-flag")
     if p is not None:
         p.add_argument("flag")
+    p = _reg("submit-coord")
+    if p is not None:
+        p.add_argument("coord")
     _reg("list-intents")
     p = _reg("write-fact")
     if p is not None:
@@ -1561,6 +1613,8 @@ def main() -> None:
         read_flags()
     elif args.cmd == "submit-flag":
         submit_flag(args.flag)
+    elif args.cmd == "submit-coord":
+        submit_coord(args.coord)
     elif args.cmd == "list-intents":
         list_intents()
     elif args.cmd == "write-fact":

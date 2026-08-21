@@ -34,6 +34,7 @@ dependencies = [
     "lief>=0.17.6",
     "python-multipart>=0.0.9",
     "deepseek-harness-sdk==0.1.0rc6",
+    "geocaching-cli",
 ]
 
 [project.optional-dependencies]
@@ -61,3 +62,6 @@ timeout = 120
 
 [tool.muteki]
 deepseek_base_url = "https://api.deepseek.com/v1"
+
+[tool.uv.sources]
+geocaching-cli = { git = "https://github.com/zzzzzyc/geocaching-cli.git", rev = "4273699" }
