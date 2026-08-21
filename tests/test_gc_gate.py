@@ -81,6 +81,7 @@ def _cli(challenge: Challenge, tmp_path: Path, **kw) -> CliSolver:
         graph = SQLiteSharedGraph(str(tmp_path / "sg.db"), challenge)
     spec = type("S", (), {"solver_id": "cli-1"})()
     solver = CliSolver(spec, challenge, kb=False, shared_graph=graph, **kw)
+    tmp_path.mkdir(parents=True, exist_ok=True)
     solver._flag_submission_dir = Path(tempfile.mkdtemp(
         prefix="muteki-coord-submission-test-", dir=tmp_path))
     return solver
@@ -542,3 +543,173 @@ def test_accept_coordinate_is_separate_from_accept_flag(tmp_path):
     solver._validated_coord_submissions.add(_SLOT_DMM)
     assert asyncio.run(solver._accept_coordinate(_SLOT_DMM)) is False
     assert solver.graph.flags == [_SLOT_DMM]
+
+
+def _last_decision(solver: CliSolver) -> dict:
+    decisions = [
+        ev for ev in solver.shared_graph.events()
+        if ev["kind"] == "flag_submission_decision"
+    ]
+    assert decisions
+    return decisions[-1]["payload"]
+
+
+def _submit_and_drain(solver: CliSolver, candidate: str = _SLOT_CANDIDATE) -> None:
+    submitted = _run_blackboard(solver, "submit-coord", candidate)
+    assert submitted.returncode == 0
+    asyncio.run(solver._drain_blackboard_flag_submissions())
+
+
+# ── review: provenance hardening ─────────────────────────────────────────────
+
+def test_cli_solver_rejects_operator_laundered_raw_candidate(tmp_path):
+    solver = _cli(_gc(digit_checksum=_SLOT_CHECKSUM), tmp_path, bus=_CaptureBus())
+    solver._remember_operator_context(f"hint: try {_SLOT_CANDIDATE}")
+    _seed_output(solver, f"echoed {_SLOT_CANDIDATE}")
+    _submit_and_drain(solver)
+    assert solver.graph.flags == []
+    assert solver.shared_graph.snapshot().flags == []
+    assert _last_decision(solver)["accepted"] is False
+    assert _last_decision(solver)["code"] == "coord_rejected"
+
+
+def test_cli_solver_rejects_operator_laundered_normalized_coord(tmp_path):
+    solver = _cli(_gc(digit_checksum=_SLOT_CHECKSUM), tmp_path, bus=_CaptureBus())
+    solver._remember_operator_context(_SLOT_DMM)
+    _seed_output(solver, f"worksheet {_SLOT_CANDIDATE}")
+    _submit_and_drain(solver)
+    assert solver.graph.flags == []
+    assert solver.shared_graph.snapshot().flags == []
+    assert _last_decision(solver)["code"] == "coord_rejected"
+
+
+def test_cli_solver_rejects_internal_storage_launder(tmp_path):
+    solver = _cli(_gc(digit_checksum=_SLOT_CHECKSUM), tmp_path, bus=_CaptureBus())
+    _seed_output(
+        solver,
+        f"found it in ~/.codex/sessions/abc {_SLOT_CANDIDATE}",
+    )
+    _submit_and_drain(solver)
+    assert solver.graph.flags == []
+    assert _last_decision(solver)["code"] == "coord_rejected"
+
+
+def test_cli_solver_rejects_file_token_launder_only_with_read_action(tmp_path):
+    stolen = _cli(_gc(digit_checksum=_SLOT_CHECKSUM), tmp_path / "steal", bus=_CaptureBus())
+    _seed_output(
+        stolen,
+        "$ grep -r coord /workspace/eval_runs/run-11550/winner.json\n"
+        f"...later...\nI recovered {_SLOT_CANDIDATE}\n",
+    )
+    _submit_and_drain(stolen)
+    assert stolen.graph.flags == []
+    assert _last_decision(stolen)["code"] == "coord_rejected"
+
+    mention = _cli(_gc(digit_checksum=_SLOT_CHECKSUM), tmp_path / "ok", bus=_CaptureBus())
+    _seed_output(
+        mention,
+        "GET /winner.json HTTP/1.1 -> 200\n"
+        f"body contained {_SLOT_CANDIDATE}\n",
+    )
+    _submit_and_drain(mention)
+    assert mention.graph.flags == [_SLOT_DMM]
+    assert _last_decision(mention)["code"] == "coord_verified"
+
+
+def test_cli_solver_rejects_foreknowledge_origin_on_verified(tmp_path):
+    solver = _cli(_gc(digit_checksum=_SLOT_CHECKSUM), tmp_path, bus=_CaptureBus())
+    solver._persist_raw_tool_output("", command=f"echo '{_SLOT_CANDIDATE}' > planted.txt")
+    solver._persist_raw_tool_output(_SLOT_CANDIDATE, command="cat planted.txt")
+    _submit_and_drain(solver)
+    assert solver.graph.flags == []
+    assert solver.shared_graph.snapshot().flags == []
+    assert _last_decision(solver)["code"] == "coord_rejected"
+
+
+def test_cli_solver_rejects_unsanctioned_origin_on_verified(tmp_path):
+    solver = _cli(_gc(digit_checksum=_SLOT_CHECKSUM), tmp_path, bus=_CaptureBus())
+    solver._persist_raw_tool_output(
+        f"solution: the coord is {_SLOT_CANDIDATE}",
+        command="curl -sL https://writeups.example/gc.html",
+    )
+    _submit_and_drain(solver)
+    assert solver.graph.flags == []
+    assert _last_decision(solver)["code"] == "coord_rejected"
+
+
+def test_cli_solver_unsanctioned_origin_still_writes_unverified_candidate(tmp_path):
+    solver = _cli(_gc(digit_checksum=1), tmp_path, bus=_CaptureBus())
+    solver._persist_raw_tool_output(
+        f"solution: the coord is {_SLOT_CANDIDATE}",
+        command="curl -sL https://writeups.example/gc.html",
+    )
+    _submit_and_drain(solver)
+    assert solver.graph.flags == []
+    assert _last_decision(solver)["accepted"] is True
+    assert _last_decision(solver)["code"] == "coord_candidate"
+    assert any(_SLOT_DMM in ev.fact for ev in solver.shared_graph.snapshot().evidence)
+
+
+def test_cli_solver_legitimate_computed_coord_still_verified(tmp_path):
+    solver = _cli(_gc(digit_checksum=_SLOT_CHECKSUM), tmp_path, bus=_CaptureBus())
+    solver._persist_raw_tool_output(
+        f"python puzzle.py\n{_SLOT_CANDIDATE}",
+        command="python puzzle.py",
+    )
+    _submit_and_drain(solver)
+    assert solver.graph.flags == [_SLOT_DMM]
+    assert solver.shared_graph.snapshot().flags == [_SLOT_DMM]
+    assert _last_decision(solver)["code"] == "coord_verified"
+
+
+# ── review minors ────────────────────────────────────────────────────────────
+
+def test_coord_ok_zero_radius_stays_zero():
+    ch = _gc(anchor_radius_m=0)
+    posted = "N 51 30.000 E 0 00.000"
+    assert coord_ok(posted, ch, posted).accepted is True
+    assert coord_ok(_SLOT_CANDIDATE, ch, _SLOT_CANDIDATE).accepted is False
+
+
+def test_coord_ok_slot_and_offset_ascii_digits_only():
+    fullwidth_slot = "１２３ ４５６"
+    assert coord_ok(fullwidth_slot, _gc(), fullwidth_slot).accepted is False
+    fullwidth_offset = "+１２３-４５６"
+    assert coord_ok(fullwidth_offset, _gc(), fullwidth_offset).accepted is False
+
+
+def test_cli_solver_operator_invalidated_normalized_coord_not_reaccepted(tmp_path):
+    graph = SQLiteSharedGraph(str(tmp_path / "sg.db"), _gc(digit_checksum=_SLOT_CHECKSUM))
+    first = _cli(_gc(digit_checksum=_SLOT_CHECKSUM), tmp_path / "w1",
+                 shared_graph=graph, bus=_CaptureBus())
+    _seed_output(first, f"worksheet {_SLOT_CANDIDATE}")
+    _submit_and_drain(first)
+    assert first.graph.flags == [_SLOT_DMM]
+    graph.reopen_after_false_positive(actor="operator", flag=_SLOT_DMM)
+    assert _SLOT_DMM in graph.invalidated_flags()
+    assert _SLOT_DMM not in graph.snapshot().flags
+
+    second = _cli(_gc(digit_checksum=_SLOT_CHECKSUM), tmp_path / "w2",
+                  shared_graph=graph, bus=_CaptureBus())
+    _seed_output(second, f"worksheet {_SLOT_CANDIDATE}")
+    _submit_and_drain(second)
+    assert second.graph.flags == []
+    assert _SLOT_DMM not in graph.snapshot().flags
+    assert _SLOT_DMM not in second._already_found
+
+
+def test_vendored_coord_attribution_and_gate_import():
+    from muteki.vendor.geocaching_cli import SOURCE_COMMIT, SOURCE_URL
+    from muteki.solver import gc_gate
+
+    assert SOURCE_COMMIT == "4273699aa1dfc7da09e75eb4211ad923e4fd0bd3"
+    assert "zzzzzyc/geocaching-cli" in SOURCE_URL
+    coord_path = (
+        Path(__file__).resolve().parents[1]
+        / "muteki" / "vendor" / "geocaching_cli" / "coord.py"
+    )
+    header = coord_path.read_text(encoding="utf-8")[:800]
+    assert SOURCE_COMMIT in header
+    assert "zzzzzyc/geocaching-cli" in header
+    assert gc_gate.LatLon.__module__ == "muteki.vendor.geocaching_cli.coord"
+    assert gc_gate.parse_coord.__module__ == "muteki.vendor.geocaching_cli.coord"

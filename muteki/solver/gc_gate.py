@@ -12,19 +12,18 @@ import math
 import re
 from typing import NamedTuple
 
-from geocaching_cli.coord import (
+from muteki.models.solve_graph import Challenge
+from muteki.vendor.geocaching_cli.coord import (
     LatLon,
     digit_checksum,
     format_dmm,
     haversine_m,
     parse_coord,
 )
-from geocaching_cli.errors import CoordError
+from muteki.vendor.geocaching_cli.errors import CoordError
 
-from muteki.models.solve_graph import Challenge
-
-_SLOT_RE = re.compile(r"^(\d{3})(?:\s+|-)(\d{3})$")
-_OFFSET_RE = re.compile(r"^([+-]\d{3})\s*([+-]\d{3})$")
+_SLOT_RE = re.compile(r"^([0-9]{3})(?:\s+|-)([0-9]{3})$")
+_OFFSET_RE = re.compile(r"^([+-][0-9]{3})\s*([+-][0-9]{3})$")
 
 
 class CoordVerdict(NamedTuple):
@@ -42,9 +41,7 @@ def coord_ok(candidate: str, challenge: Challenge, raw_output: str) -> CoordVerd
     """Return a stable verdict for one coordinate candidate. Never raises."""
     try:
         return _coord_ok(candidate, challenge, raw_output)
-    except CoordError:
-        return _rejected("坐标无法解析或超出范围")
-    except (TypeError, ValueError, OverflowError):
+    except Exception:
         return _rejected("坐标无法解析或超出范围")
 
 
@@ -79,7 +76,10 @@ def _coord_ok(candidate: str, challenge: Challenge, raw_output: str) -> CoordVer
     if not math.isfinite(final.latitude) or not math.isfinite(final.longitude):
         return _rejected("坐标包含非有限数值")
 
-    radius = float(getattr(challenge, "anchor_radius_m", 3200.0) or 3200.0)
+    radius = getattr(challenge, "anchor_radius_m", 3200.0)
+    if radius is None:
+        radius = 3200.0
+    radius = float(radius)
     distance = haversine_m(posted, final)
     if distance > radius:
         return _rejected(

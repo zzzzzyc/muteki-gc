@@ -3420,12 +3420,33 @@ class CliSolver:
             detail = "geocache 模式仅接受 submit-coord 坐标载荷"
         else:
             try:
-                verdict = _gate_coord_ok(
-                    coord, self.challenge, self._provenance_corpus())
+                corpus = self._provenance_corpus()
+                verdict = _gate_coord_ok(coord, self.challenge, corpus)
                 accepted = bool(verdict.accepted)
                 verified = bool(verdict.verified)
                 coord_text = str(verdict.coord_text or "")
                 reason = str(verdict.reason or "")
+                if accepted and (
+                    self._value_evidence_laundered(coord, corpus)
+                    or self._value_evidence_laundered(coord_text, corpus)
+                ):
+                    accepted = False
+                    verified = False
+                    reason = "坐标溯源不可信（操作者上下文或内部存储）"
+                elif accepted and verified:
+                    if coord_text in self._rejected_flags():
+                        accepted = False
+                        verified = False
+                        reason = "操作者已将此坐标标为误报，永久拒绝"
+                    else:
+                        origin = (
+                            self._origin_tainted(coord)
+                            or self._origin_tainted(coord_text)
+                        )
+                        if origin is not None:
+                            accepted = False
+                            verified = False
+                            reason = f"坐标来源不受信任：{origin}"
                 if not accepted:
                     code = "coord_rejected"
                 elif verified:
@@ -3607,6 +3628,25 @@ class CliSolver:
     def _flag_from_operator_context(self, flag: str) -> bool:
         """True when ``flag`` was supplied by the operator rather than discovered."""
         return bool(flag and flag in self._operator_context_corpus())
+
+    def _value_evidence_laundered(self, value: str, raw_output: str) -> bool:
+        """Operator-taint and per-record launder checks shared with ``_flag_ok``.
+
+        Extracted so the geocache completion path can apply the same protections
+        without calling or changing ``_flag_ok``.
+        """
+        if not value:
+            return False
+        if self._flag_from_operator_context(value):
+            return True
+        records = self._flag_provenance_records(value, raw_output)
+        if any(self._LAUNDER_RE.search(record) for record in records):
+            return True
+        return any(
+            self._LAUNDER_FILE_RE.search(record)
+            and self._READ_ACTION_RE.search(record)
+            for record in records
+        )
 
     # the REAL provenance gate — the one shared, hardcoded acceptance check.
     def _flag_ok(self, flag: str, raw_output: str) -> bool:
@@ -7173,6 +7213,11 @@ class CliSolver:
             await self._emit_bb(
                 "flag_reaccept_blocked", flag=coord,
                 reason="operator marked this coordinate false-positive; permanently rejected")
+            return False
+        if self._flag_from_operator_context(coord):
+            return False
+        origin = self._origin_tainted(coord)
+        if origin is not None:
             return False
         self._already_found.add(coord)
         if bool(getattr(self, "_protocol2_mode", False)):
