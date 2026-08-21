@@ -713,11 +713,13 @@ def test_admission_enforces_scope_identity_and_run_wide_actions():
 
     for action in (
         "pause", "resume", "stop", "complete", "graceful_drain",
-        "clear_standing", "reset_guidance", "mark_false",
+        "clear_standing", "reset_guidance", "mark_false", "verify_coord",
     ):
+        payload = {"text": "N 51 30.123 E 0 00.456"} if action == "verify_coord" else {}
         with pytest.raises(AdmissionError, match="run-scoped action"):
             admission.admit(ControlCommand(
-                run_id="run-1", action=action, scope="solver:w-1"), state)
+                run_id="run-1", action=action, scope="solver:w-1",
+                payload=payload), state)
 
     assert admission.admit(ControlCommand(
         run_id="run-1", action="pause", scope="challenge:challenge-1"), state

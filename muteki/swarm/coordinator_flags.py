@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 from muteki.core.cost import CostController
 from muteki.core.event_bus import EventBus
 from muteki.core.runtime_env import is_web_container
-from muteki.core.events import Event, EventType, blackboard_delta_payload
+from muteki.core.events import Event, EventType, blackboard_delta_payload, insight_payload
 from muteki.core.llm import LLMClient, ModelSpec
 from muteki.models.solve_graph import (
     Challenge, engagement_goal_of, engagement_reports_complete,
@@ -1306,6 +1306,110 @@ class _FlagsBusMixin:
             raise RuntimeError("reserved secret material is unavailable")
         return resolved
 
+    async def _apply_operator_verify_coord(
+        self, cmd: dict[str, Any], *, payload: dict[str, Any], text: str,
+    ) -> None:
+        """Upgrade an existing gc_gate candidate. Operator text is never evidence."""
+        if getattr(self.challenge, "mode", "") != "geocache":
+            self._ack_control(
+                cmd, state="failed",
+                detail="verify_coord is valid only for geocache challenges",
+                metadata={"code": "coord_rejected"})
+            return
+        raw = str(cmd.get("coord") or payload.get("coord") or text or "").strip()
+        if (not raw or "\n" in raw or "\r" in raw or len(raw) > 256):
+            self._ack_control(
+                cmd, state="failed",
+                detail="verify_coord requires one parseable coordinate line",
+                metadata={"code": "coord_invalid"})
+            return
+        try:
+            from muteki.vendor.geocaching_cli.coord import format_dmm, parse_coord
+            normalized = format_dmm(parse_coord(raw))
+        except Exception:
+            self._ack_control(
+                cmd, state="failed",
+                detail="coordinate could not be parsed",
+                metadata={"code": "coord_invalid"})
+            return
+        if self.shared_graph is None:
+            self._ack_control(
+                cmd, state="failed",
+                detail="coordinate graph is unavailable",
+                metadata={"code": "coord_candidate_not_found"})
+            return
+        try:
+            snap = self.shared_graph.snapshot()
+            invalidated = self.shared_graph.invalidated_flags()
+        except Exception:
+            self._ack_control(
+                cmd, state="failed",
+                detail="coordinate graph is unavailable",
+                metadata={"code": "coord_candidate_not_found"})
+            return
+        if normalized in invalidated:
+            self._ack_control(
+                cmd, state="failed",
+                detail="coordinate was previously rejected",
+                metadata={"code": "coord_rejected"})
+            return
+        already = normalized in list(getattr(snap, "flags", []) or [])
+        expected_fact = f"坐标候选 {normalized}"
+        matched = False
+        for ev in list(getattr(snap, "evidence", []) or []):
+            if (
+                getattr(ev, "source", "") == "gc_gate"
+                and getattr(ev, "verified", True) is False
+                and getattr(ev, "fact", "") == expected_fact
+                and str(getattr(ev, "witness", "") or "").strip()
+            ):
+                matched = True
+                break
+        if not already and not matched:
+            self._ack_control(
+                cmd, state="failed",
+                detail="no matching gc_gate coordinate candidate",
+                metadata={"code": "coord_candidate_not_found"})
+            return
+        if not already:
+            try:
+                self.shared_graph.flag_found(
+                    actor="operator-coordinate-verifier", flag=normalized)
+            except Exception:
+                self._ack_control(
+                    cmd, state="failed",
+                    detail="coordinate verification was not committed",
+                    metadata={"code": "coord_rejected"})
+                return
+            try:
+                await self._emit_coord_bb(
+                    "coord_found", coord=normalized, verification="operator")
+                if self.bus is not None:
+                    await self.bus.emit(Event(
+                        event_type=EventType.INSIGHT_BUS_EVENT,
+                        run_id=self.run_id,
+                        challenge_id=self.challenge.id,
+                        payload=insight_payload(
+                            "FlagFound", flag=normalized,
+                            by="operator-coordinate-verifier"),
+                    ))
+                insight = getattr(self, "insight", None)
+                if insight is not None:
+                    await insight.flag_found(
+                        "operator-coordinate-verifier", normalized)
+            except Exception:
+                pass
+        self._sync_flags_from_graph()
+        if self._operator_event is not None:
+            self._operator_event.set()
+        self._ack_control(
+            cmd, state="effect_observed",
+            detail="coordinate verified by operator",
+            metadata={
+                "effect": "coord_verified",
+                "verification": "operator",
+            })
+
     @staticmethod
     def _ack_control(
         cmd: dict[str, Any],
@@ -2135,7 +2239,7 @@ class _FlagsBusMixin:
                 if (action in {
                         "pause", "resume", "stop", "complete",
                         "graceful_drain", "clear_standing", "reset_guidance",
-                        "mark_false",
+                        "mark_false", "verify_coord",
                 } and not scope_is_global):
                     self._ack_control(
                         cmd, state="failed",
@@ -2831,6 +2935,10 @@ class _FlagsBusMixin:
                         cmd, state="effect_observed",
                         detail="flag invalidated and dependent intents reopened",
                         metadata={"effect": "flag_invalidated"})
+                    continue
+                if action == "verify_coord":
+                    await self._apply_operator_verify_coord(
+                        cmd, payload=payload, text=str(text or ""))
                     continue
                 # `url` is the NEW target a redirect carries (distinct from `target`,
                 # which is the SCOPE: global / solver:<id>). `standing` marks

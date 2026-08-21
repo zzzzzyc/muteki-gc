@@ -100,6 +100,17 @@ def test_result_list_label_is_verified_coord_for_geocache():
     assert "s.flags" in events or "flags =" in events
 
 
+def test_slash_verify_coord_uses_control_api_not_local_flag():
+    convo = _read("components", "Conversation.tsx")
+    use_run = _read("lib", "useRun.ts")
+    assert 'raw.startsWith("/")' in convo
+    assert "onCommand(cmdTarget, a, payload)" in convo
+    assert "`/api/runs/${runId}/control`" in use_run
+    assert "{ target, action, text }" in use_run
+    assert "flag_found" not in use_run
+    assert "add_evidence" not in use_run
+
+
 def test_resolve_swarm_class_default_unchanged():
     from apps.web.drivers import _resolve_swarm_class
     from muteki.swarm.swarm import Swarm

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
 
@@ -52,6 +53,7 @@ _RUN_SCOPED_ACTIONS = {
     ControlAction.CLEAR_STANDING,
     ControlAction.RESET_GUIDANCE,
     ControlAction.MARK_FALSE,
+    ControlAction.VERIFY_COORD,
 }
 _RUN_SCOPE_KINDS = {ScopeKind.GLOBAL, ScopeKind.RUN, ScopeKind.CHALLENGE}
 _TERMINATED_FOLLOWUPS = {
@@ -75,11 +77,30 @@ _TERMINATED_FOLLOWUPS = {
 }
 
 
+def _verify_coord_raw(payload: dict) -> str:
+    return str(payload.get("coord") or payload.get("text") or "").strip()
+
+
 class ControlAdmission:
     def __init__(self, *, max_payload_bytes: int = 64 * 1024,
-                 challenge_id: Optional[str] = None) -> None:
+                 challenge_id: Optional[str] = None,
+                 challenge_mode: Optional[str] = None,
+                 challenge_mode_fn: Optional[Callable[[], Optional[str]]] = None,
+                 ) -> None:
         self.max_payload_bytes = max(1024, int(max_payload_bytes))
         self.challenge_id = str(challenge_id).strip() if challenge_id else None
+        self.challenge_mode = str(challenge_mode).strip() if challenge_mode else None
+        self.challenge_mode_fn = challenge_mode_fn
+
+    def _resolved_challenge_mode(self) -> str:
+        if self.challenge_mode_fn is not None:
+            try:
+                got = self.challenge_mode_fn()
+            except Exception:
+                got = None
+            if got:
+                return str(got).strip()
+        return str(self.challenge_mode or "").strip()
 
     def admit(self, command: ControlCommand, state: RunControlState, *,
               now: Optional[float] = None) -> AdmissionDecision:
@@ -154,6 +175,24 @@ class ControlAdmission:
                     and not command.payload.get("worker_id")):
                 raise AdmissionError(
                     "missing_worker", "cancel_worker requires worker scope or payload.worker_id"
+                )
+        elif command.action is ControlAction.VERIFY_COORD:
+            raw = _verify_coord_raw(command.payload)
+            if not raw:
+                raise AdmissionError(
+                    "missing_content",
+                    "verify_coord requires payload.coord or payload.text",
+                )
+            if "\n" in raw or "\r" in raw or len(raw) > 256:
+                raise AdmissionError(
+                    "coord_invalid",
+                    "verify_coord requires a single line of at most 256 characters",
+                )
+            mode = self._resolved_challenge_mode()
+            if mode != "geocache":
+                raise AdmissionError(
+                    "coord_rejected",
+                    "verify_coord is valid only when challenge.mode is geocache",
                 )
 
         return AdmissionDecision(

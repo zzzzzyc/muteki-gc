@@ -71,6 +71,8 @@ python3 blackboard.py submit-coord '<candidate>'
 ```
 
 本地算出并被本机接受的 candidate **不会结束任务**。checksum 或 Muteki host 的 checker 核验通过后才算 verified。
+listing **没有 checksum / checker** 时：提交有证据的 candidate，并告诉操作员等待
+`/verify_coord <normalized-coordinate>`。**不要** 调用、模拟或伪造该操作员命令。
 散文、聊天或“我解出来了”都不能宣告完成。
 
 ## GeoCheck 限流锁

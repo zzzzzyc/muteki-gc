@@ -270,7 +270,7 @@ class SessionStore:
         """
         path = self._path(run_id)
         summary = {
-            "run_id": run_id, "name": run_id, "category": "",
+            "run_id": run_id, "name": run_id, "category": "", "mode": "",
             "started": False, "finished": False, "solved": False, "flag": None,
             "flags": [], "expected_flags": 1, "multi_flag": False,
             "events": 0, "ts": 0.0, "execution_generation": 0,
@@ -332,6 +332,8 @@ class SessionStore:
                     ch = p.get("challenge") or {}
                     summary["name"] = ch.get("name") or summary["name"]
                     summary["category"] = ch.get("category") or summary["category"]
+                    if ch.get("mode"):
+                        summary["mode"] = str(ch.get("mode") or "") or summary["mode"]
                     if ch.get("expected_flags"):
                         summary["expected_flags"] = int(ch["expected_flags"])
                     if "multi_flag" in ch:

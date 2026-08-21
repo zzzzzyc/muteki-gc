@@ -127,6 +127,7 @@ class ControlAction(str, Enum):
     CLEAR_STANDING = "clear_standing"
     RESET_GUIDANCE = "reset_guidance"
     MARK_FALSE = "mark_false"
+    VERIFY_COORD = "verify_coord"
     SUBMIT = "submit"
     WRITEUP = "writeup"
     ANSWER_DECISION = "answer_decision"

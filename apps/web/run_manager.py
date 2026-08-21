@@ -147,6 +147,7 @@ class Run:
     # the bus as a sink (the run stays a dumb event source — no extra contract).
     name: str = ""
     category: str = ""
+    mode: str = ""
     started: bool = False
     solved: bool = False
     paused: bool = False
@@ -262,6 +263,7 @@ class Run:
             # do NOT leak the bare run id as a display name.
             "name": self.custom_name or self.name,
             "category": self.category or "",
+            "mode": self.mode or "",
             "started": self.started,
             "finished": self.finished,
             "solved": self.solved,
@@ -689,6 +691,7 @@ class RunManager:
             # the rail renders its placeholder instead of leaking the bare id.
             run.name = "" if s.get("name") in (None, "", rid) else s["name"]
             run.category = s.get("category", "") or ""
+            run.mode = str(s.get("mode") or "") or ""
             run.started = bool(s.get("started"))
             # Protocol 1 keeps the historical ghost-run compatibility contract: a
             # dead started run is force-settled. Protocol 2 lifecycle is canonical
@@ -1318,6 +1321,8 @@ class RunManager:
                 if ch.get("name"):
                     run.name = ch["name"]
                 run.category = ch.get("category", run.category) or run.category
+                if ch.get("mode"):
+                    run.mode = str(ch.get("mode") or "") or run.mode
                 if ch.get("expected_flags"):
                     run.expected_flags = int(ch["expected_flags"])
                 if "multi_flag" in ch:
@@ -2512,7 +2517,10 @@ class RunManager:
             journal=journal,
             port=_RuntimeFencedPort(),
             registry=run.worker_registry,
-            admission=ControlAdmission(challenge_id=run.run_id),
+            admission=ControlAdmission(
+                challenge_id=run.run_id,
+                challenge_mode_fn=lambda: getattr(run, "mode", None),
+            ),
             effect_sink=_effect_sink,
             secret_resolver=secrets.resolve,
         )
@@ -3135,6 +3143,8 @@ class RunManager:
                 if ch.get("name"):
                     run.name = ch["name"]
                 run.category = ch.get("category", run.category) or run.category
+                if ch.get("mode"):
+                    run.mode = str(ch.get("mode") or "") or run.mode
                 if ch.get("expected_flags"):
                     run.expected_flags = int(ch["expected_flags"])
                 if "multi_flag" in ch:
