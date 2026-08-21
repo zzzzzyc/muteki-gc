@@ -568,6 +568,35 @@ def fill_certitude_solution(page: Any, coord_text: str) -> None:
         locator.first.fill(_normalize_coord_text(coord_text))
 
 
+def _await_checker_form(page: Any, site: CheckerSite, timeout_ms: int) -> str | None:
+    """Wait for the real checker form to appear before filling.
+
+    Certitude sits behind an Anubis proof-of-work page; ``domcontentloaded``
+    resolves on that interstitial, so filling immediately would hit an empty
+    page. Wait for the form input (or a verdict element, if the page already
+    holds one) instead. A timeout here is operational, not a wrong-coordinate
+    verdict, so the caller must not treat it as a definitive reject.
+    """
+    if site == "certitude":
+        target = (
+            f"{CERTITUDE_SELECTORS['solutionInput']}, "
+            f"{CERTITUDE_SELECTORS['successElement']}, "
+            f"{CERTITUDE_SELECTORS['failureElement']}"
+        )
+    else:
+        target = (
+            f"{GEOCHECK_SELECTORS['oneFieldInput']}, "
+            f"{GEOCHECK_SELECTORS['multiFieldInputs']['latdeg']}, "
+            f"{GEOCHECK_SELECTORS['successElement']}, "
+            f"{GEOCHECK_SELECTORS['failureElement']}"
+        )
+    try:
+        page.wait_for_selector(target, timeout=timeout_ms)
+    except Exception:
+        return "form_timeout"
+    return None
+
+
 def _submit_checker(page: Any, site: CheckerSite) -> None:
     selector = (
         CERTITUDE_SELECTORS["submitButton"]
@@ -686,6 +715,16 @@ def check_geocheck(
                     return _operational()
                 if aborted_nav or not _family_matches(getattr(page, "url", ""), site):
                     return _rejected()
+                form_error = _await_checker_form(page, site, timeout_ms)
+                if form_error is not None:
+                    return _result(
+                        ok=False,
+                        site=site,
+                        message="form_timeout",
+                        attempts=1,
+                        coord_text=normalized,
+                        definitive=False,
+                    )
                 fill_error = _fill_checker(page, site, normalized)
                 if fill_error == "captcha_unsolved":
                     return _result(

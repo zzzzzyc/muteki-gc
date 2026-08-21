@@ -509,6 +509,7 @@ class LivePage:
         self.checked: list[str] = []
         self.selected: dict[str, str] = {}
         self.goto_calls: list[dict[str, Any]] = []
+        self.selector_waits: list[dict[str, Any]] = []
         self.context: LiveContext | None = None
         self.after_submit_url = after_submit_url
         self.after_submit_html = after_submit_html
@@ -570,6 +571,7 @@ class LivePage:
     def wait_for_selector(self, selector: str, timeout: int = 0) -> None:
         if self.timeout:
             raise FakeTimeout("selector wait timed out")
+        self.selector_waits.append({"selector": selector, "timeout": timeout})
 
 
 class LiveContext:
@@ -950,6 +952,38 @@ def test_certitude_submit_uses_first_matching_locator() -> None:
     _submit_checker(page, "certitude")
     assert CERTITUDE_SELECTORS["submitButton"] in page.clicked
     assert CERTITUDE_SELECTORS["submitButton"] in page.first_used
+
+
+def test_certitude_waits_for_form_before_filling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Anubis interstitial must not be treated as the checker page."""
+    page = LivePage(html=certitude_success_html(), start_url="https://certitude.org/c")
+    closed, _browser = _install_playwright(monkeypatch, page)
+    result = check_geocheck("https://certitude.org/c", COORD, timeout_s=5)
+    assert result["ok"] is True
+    assert result["definitive"] is True
+    assert page.selector_waits, "expected a form wait before filling"
+    first_wait = page.selector_waits[0]["selector"]
+    assert CERTITUDE_SELECTORS["solutionInput"] in first_wait
+    assert CERTITUDE_SELECTORS["successElement"] in first_wait
+    assert page.selector_waits[0]["timeout"] == 5000
+    assert page.filled[CERTITUDE_SELECTORS["solutionInput"]] == COORD
+    assert closed == {"context": True, "browser": True}
+
+
+def test_certitude_form_wait_timeout_is_operational(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stuck Anubis gate is not a wrong-coordinate verdict."""
+    page = LivePage(
+        html="<html><body>anubis pow</body></html>",
+        start_url="https://certitude.org/c",
+        timeout=True,
+    )
+    closed, _browser = _install_playwright(monkeypatch, page)
+    result = check_geocheck("https://certitude.org/c", COORD, timeout_s=1)
+    assert result["ok"] is False
+    assert result["definitive"] is False
+    assert result["message"] == "form_timeout"
+    assert CERTITUDE_SELECTORS["submitButton"] not in page.clicked
+    assert closed == {"context": True, "browser": True}
 
 
 def test_alert_captcha_session_is_not_definitive_reject() -> None:
