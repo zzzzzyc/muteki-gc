@@ -2665,31 +2665,13 @@ class EndpointDriver(CliDriver):
         sees ITS OWN injected key, not whatever another thread last overlaid."""
         src = env if env is not None else os.environ
         ref = str(self.profile.get("api_key_ref") or "").strip()
-        # #region agent log
-        import hashlib as _hl, json as _json, time as _t
-        def _kmeta(v):
-            v = v or ""
-            return {"present": bool(v), "len": len(v), "sha8": _hl.sha256(v.encode()).hexdigest()[:8] if v else ""}
-        def _dlog(hid, loc, msg, data):
-            open("/opt/cursor/logs/debug.log", "a").write(_json.dumps({"hypothesisId": hid, "location": loc, "message": msg, "data": data, "timestamp": int(_t.time() * 1000)}) + "\n")
-        # #endregion
         if ref.startswith("env:"):
-            # #region agent log
-            _dlog("C", "cli_driver.py:_api_key", "env-ref branch", {"engine": self.name, "ref_kind": "env", "ref_name": ref[4:], "key": _kmeta(src.get(ref[4:], ""))})
-            # #endregion
             return src.get(ref[4:], "")
         if ref.startswith("file:"):
-            _fp = Path(ref[5:])
             try:
-                _val = _fp.read_text(encoding="utf-8").strip()
-                _branch = "file_ok"
-            except OSError as _e:
-                _val = ""
-                _branch = type(_e).__name__
-            # #region agent log
-            _dlog("B", "cli_driver.py:_api_key", "file-ref branch", {"engine": self.name, "ref_kind": "file", "path_exists": _fp.exists(), "branch": _branch, "key": _kmeta(_val)})
-            # #endregion
-            return _val
+                return Path(ref[5:]).read_text(encoding="utf-8").strip()
+            except OSError:
+                return ""
         # No explicit ref → fall back to the env the Credential Account injection
         # sets for this transport: <PROVIDER>_API_KEY_FILE (file-backed) or the
         # bare <PROVIDER>_API_KEY (env-backed).
@@ -2700,20 +2682,10 @@ class EndpointDriver(CliDriver):
         file_env = src.get(f"{env_name}_FILE", "").strip()
         if file_env:
             try:
-                _val = Path(file_env).read_text(encoding="utf-8").strip()
-                _branch = "file_env_ok"
-            except OSError as _e:
-                _val = ""
-                _branch = type(_e).__name__
-            # #region agent log
-            _dlog("E", "cli_driver.py:_api_key", "file-env fallback", {"engine": self.name, "ref_kind": "none", "file_env_set": True, "branch": _branch, "key": _kmeta(_val), "src_openai": _kmeta(src.get("OPENAI_API_KEY", ""))})
-            # #endregion
-            return _val
-        _val = src.get(env_name, "").strip()
-        # #region agent log
-        _dlog("C", "cli_driver.py:_api_key", "bare-env fallback", {"engine": self.name, "ref_kind": "none", "env_name": env_name, "file_env_set": False, "key": _kmeta(_val)})
-        # #endregion
-        return _val
+                return Path(file_env).read_text(encoding="utf-8").strip()
+            except OSError:
+                return ""
+        return src.get(env_name, "").strip()
 
     def health_detail(self, *, env: "dict[str, str] | None" = None) -> "tuple[bool, str]":
         # A direct HTTP request proves only that one endpoint shape accepts one
@@ -2721,15 +2693,6 @@ class EndpointDriver(CliDriver):
         # provider/model flags and response parser to complete the same turn a
         # Worker will run.
         probe_env = {**os.environ, **self.env_extra(), **(env or {})}
-        # #region agent log
-        import hashlib as _hl, json as _json, time as _t
-        def _kmeta(v):
-            v = v or ""
-            return {"present": bool(v), "len": len(v), "sha8": _hl.sha256(v.encode()).hexdigest()[:8] if v else ""}
-        def _dlog(hid, loc, msg, data):
-            open("/opt/cursor/logs/debug.log", "a").write(_json.dumps({"hypothesisId": hid, "location": loc, "message": msg, "data": data, "timestamp": int(_t.time() * 1000)}) + "\n")
-        _dlog("A", "cli_driver.py:health_detail", "probe_env merged", {"engine": self.name, "profile_name": str(self.profile.get("name") or ""), "ref_prefix": str(self.profile.get("api_key_ref") or "").split(":", 1)[0], "os_openai": _kmeta(os.environ.get("OPENAI_API_KEY", "")), "extra_keys": sorted(self.env_extra().keys()), "caller_env_has_openai": "OPENAI_API_KEY" in (env or {}), "probe_openai_before_resolve": _kmeta(probe_env.get("OPENAI_API_KEY", ""))})
-        # #endregion
         base_url = str(self.profile.get("base_url") or "").strip()
         if self.name == "claude" and base_url:
             probe_env.setdefault("ANTHROPIC_BASE_URL", base_url)
@@ -2751,13 +2714,7 @@ class EndpointDriver(CliDriver):
             "dsh": "DEEPSEEK_API_KEY",
         }.get(self.name)
         if key and key_env:
-            _before = probe_env.get(key_env, "")
-            _would_write = key_env not in probe_env
             probe_env[key_env] = key
-            _after = probe_env.get(key_env, "")
-            # #region agent log
-            _dlog("A", "cli_driver.py:health_detail", "setdefault inject", {"engine": self.name, "key_env": key_env, "resolved_key": _kmeta(key), "before": _kmeta(_before), "after": _kmeta(_after), "setdefault_wrote": _would_write, "resolved_eq_before": _kmeta(key) == _kmeta(_before), "resolved_eq_after": _kmeta(key) == _kmeta(_after)})
-            # #endregion
             if self.name == "claude":
                 probe_env.setdefault("ANTHROPIC_AUTH_TOKEN", key)
         return CliDriver.health_detail(self, env=probe_env)
