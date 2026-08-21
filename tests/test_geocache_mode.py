@@ -221,6 +221,22 @@ def test_ctf_and_pentest_prompt_constants_unchanged():
     assert "Do not submit a flag." in _cli_solver._PENTEST_RESUME_PROMPT
 
 
+def test_infer_geocache_checker_url_sets_verifier_rate_limited():
+    from apps.web.drivers import _infer_challenge
+
+    body = _infer_challenge({
+        "kind": "swarm",
+        "prompt": "解 GC8ABCD",
+        "challenge": {
+            "mode": "geocache",
+            "description": "解 GC8ABCD",
+            **_GC_FIELDS,
+        },
+    })
+    assert body["challenge"]["verifier_rate_limited"] is True
+    assert body["challenge"]["geocheck_url"] == _GC_FIELDS["geocheck_url"]
+
+
 def test_build_prompt_geocache_includes_listing_and_submit_coord():
     p = _solver(_gc_challenge())._build_prompt()
     assert "GC8ABCD" in p
@@ -241,6 +257,10 @@ def test_build_prompt_geocache_includes_listing_and_submit_coord():
         assert needle not in p
     assert "offline" not in p.lower()
     assert "writeup" in p.lower()
+    assert "READY_TO_SUBMIT=" in p
+    assert "verifier:geocheck@" in p
+    assert "不要运行" in p or "do not run" in p.lower()
+    assert "before `gc check`" not in p
 
 
 def test_build_prompt_ctf_and_pentest_stay_isolated_from_gc():

@@ -415,6 +415,22 @@ def _geocache_challenge_kwargs(ch: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _effective_verifier_rate_limited(
+    mode: str, ch: dict[str, Any], body: dict[str, Any] | None = None,
+) -> bool:
+    """True when the caller opted in, or a geocache listing has a checker URL."""
+    body = body or {}
+    if body.get("verifier_rate_limited") is not None:
+        explicit = bool(body.get("verifier_rate_limited"))
+    else:
+        explicit = bool(ch.get("verifier_rate_limited", False))
+    if explicit:
+        return True
+    if mode == "geocache" and str(ch.get("geocheck_url") or "").strip():
+        return True
+    return False
+
+
 def _infer_challenge(body: dict[str, Any]) -> dict[str, Any]:
     """Fill a `challenge` block from a conversational `prompt` when the caller
     didn't pass structured fields. Caller-provided fields always win."""
@@ -425,6 +441,8 @@ def _infer_challenge(body: dict[str, Any]) -> dict[str, Any]:
     raw_mode = body.get("mode") or ch.get("mode")
     if raw_mode:
         ch["mode"] = normalize_challenge_mode(raw_mode)
+    if ch.get("mode") == "geocache" and str(ch.get("geocheck_url") or "").strip():
+        ch["verifier_rate_limited"] = True
     prompt = (body.get("prompt") or ch.get("description") or "").strip()
     if not prompt:
         body["challenge"] = ch
@@ -699,9 +717,8 @@ def _swarm_driver(body: dict[str, Any], mgr: RunManager | None = None) -> Driver
             flag_format_wrapper=flag_format_wrapper,
             expected_flags=max(1, expected_flags),
             multi_flag=multi_flag,
-            verifier_rate_limited=bool(body.get("verifier_rate_limited")
-                                       if body.get("verifier_rate_limited") is not None
-                                       else ch.get("verifier_rate_limited", False)),
+            verifier_rate_limited=_effective_verifier_rate_limited(
+                mode, ch, body),
             mode=mode,
             goal=goal_text,
             scope=scope_text,
@@ -1442,7 +1459,7 @@ def build_standby_driver(cmd: dict[str, Any], mgr: "RunManager | None" = None) -
             # flag (review #15). winner.json persists these in the challenge block.
             expected_flags=int(ch.get("expected_flags") or 1),
             multi_flag=bool(ch.get("multi_flag", False)),
-            verifier_rate_limited=bool(ch.get("verifier_rate_limited", False)),
+            verifier_rate_limited=_effective_verifier_rate_limited(mode, ch),
             mode=mode,
             goal=ch.get("goal") or "",
             scope=ch.get("scope") or "",

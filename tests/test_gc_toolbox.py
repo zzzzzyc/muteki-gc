@@ -46,6 +46,10 @@ def test_gc_skill_files_exist():
     assert "coord_calc.py" in text
     assert "gc show" in text
     assert "verifier:geocheck@" in text
+    assert "submit-coord" in text
+    assert "READY_TO_SUBMIT" in text
+    assert "不要运行" in text or "do not run" in text.lower()
+    assert "gc check" in text
     assert "NEED_INPUT=" in text
     assert "NEED_KIND=external_blocker" in text
     assert _CALC.is_file(), "skills/gc-blackboard/coord_calc.py missing"

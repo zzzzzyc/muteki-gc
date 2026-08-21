@@ -416,7 +416,7 @@ def test_flag_submission_graph_api_coord_kind_omits_flag(tmp_path):
 
 def test_cli_solver_candidate_writes_fact_not_graph_flag(tmp_path):
     bus = _CaptureBus()
-    ch = _gc(digit_checksum=1)
+    ch = _gc(digit_checksum=1, geocheck_url="")
     solver = _cli(ch, tmp_path, bus=bus)
     _seed_output(solver, f"worksheet {_SLOT_CANDIDATE}")
     submitted = _run_blackboard(solver, "submit-coord", _SLOT_CANDIDATE)

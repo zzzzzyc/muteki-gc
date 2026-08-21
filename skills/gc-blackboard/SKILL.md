@@ -70,20 +70,22 @@ python3 coord_calc.py convert "<coord>" --to dd
 python3 blackboard.py submit-coord '<candidate>'
 ```
 
-本地算出并被本机接受的 candidate **不会结束任务**。checksum 或 checker 核验通过后才算 verified。
+本地算出并被本机接受的 candidate **不会结束任务**。checksum 或 Muteki host 的 checker 核验通过后才算 verified。
 散文、聊天或“我解出来了”都不能宣告完成。
 
 ## GeoCheck 限流锁
 
-若 listing 带 `geocheck_url`，在 `gc check` 之前先独占领取，结束后释放：
+若 listing 带 `geocheck_url`，在 `submit-coord` 之前先打印 `READY_TO_SUBMIT=<coord>` 并独占领取，结束后释放。
+**不要运行 gc check** — Muteki host 只提交一次。
 
 ```
 python3 blackboard.py claim-resource "verifier:geocheck@<gc_code>" --risk-class rate-limited
-gc check ...
+# READY_TO_SUBMIT=<coord>
+python3 blackboard.py submit-coord '<candidate>'
 python3 blackboard.py release-resource "verifier:geocheck@<gc_code>"
 ```
 
-`claim-resource` 打印 `LOST` 时不要并发打 checker。
+`claim-resource` 打印 `LOST` 时不要并发提交。
 
 ## 会话阻塞
 

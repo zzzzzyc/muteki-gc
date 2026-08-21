@@ -53,6 +53,10 @@ from muteki.solver.gate import (
     is_placeholder_flag,
     parse_finding_claim,
 )
+from muteki.solver.gc_checker import (
+    ExternalCoordVerdict,
+    verify_external_coordinate,
+)
 from muteki.solver.gc_gate import coord_ok as _gate_coord_ok
 from muteki.solver.vuln_report import (
     VERIFIER_PROMPT as _VERIFIER_PROMPT,
@@ -591,13 +595,15 @@ _GC_EXEC_PROMPT = (
     "  python3 blackboard.py read-branches\n"
     "  python3 coord_calc.py project \"<coord>\" <bearing_deg> <distance_m>\n"
     "  gc show <GC> --json\n"
-    "If geocheck_url is set, claim `verifier:geocheck@<gc_code>` with risk class "
-    "rate-limited before `gc check`, then release it.\n\n"
+    "If geocheck_url is set, print `READY_TO_SUBMIT=<coord>` and claim "
+    "`verifier:geocheck@<gc_code>` with risk class rate-limited before "
+    "submit-coord, then release it. Do not run `gc check` yourself — the "
+    "Muteki host submits the checker once. 不要运行 gc check。\n\n"
     "Print team markers from REAL output only:\n"
     "  VERIFIED_FACT=<confirmed finding + witness path>\n"
     "  DEADEND=<a reading/cipher/projection hypothesis you disproved>\n"
-    "A locally accepted candidate does not finish the run. Checksum or checker "
-    "verification does. Do not claim completion in prose.\n"
+    "A locally accepted candidate does not finish the run. Checksum or host "
+    "checker verification does. Do not claim completion in prose.\n"
     "When a coordinate candidate appears in REAL tool output, submit it with:\n"
     "  python3 \"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'\n"
     "Do not search the web for a cache writeup as a substitute for solving. "
@@ -626,6 +632,9 @@ _GC_EXPLORE_PROMPT = (
     "  DEADEND=<why this reading/cipher/projection axis failed>\n"
     "  NEED_INPUT=<an EXTERNAL blocker only the operator can fix>\n"
     "  NEED_KIND=<external_blocker|lane_lock_request|route_dead_end|worker_uncertainty|operator_directive_needed>\n"
+    "If geocheck_url is set, print `READY_TO_SUBMIT=<coord>` and claim "
+    "`verifier:geocheck@<gc_code>` (rate-limited) before submit-coord. "
+    "Do not run `gc check` yourself — Muteki host submits once. 不要运行 gc check。\n"
     "  python3 \"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'  "
     "(only after REAL output produced it)\n"
     "Read-deadends before starting. A candidate is not verified. Do not claim "
@@ -3573,10 +3582,41 @@ class CliSolver:
                             accepted = False
                             verified = False
                             reason = f"坐标来源不受信任：{origin}"
+                checker_code = ""
+                if accepted and not verified:
+                    geocheck_url = str(
+                        getattr(self.challenge, "geocheck_url", "") or ""
+                    ).strip()
+                    if geocheck_url:
+                        origin = (
+                            self._origin_tainted(coord)
+                            or self._origin_tainted(coord_text)
+                        )
+                        if origin is not None:
+                            reason = "坐标来源不受信任，不能升级为外部校验"
+                        else:
+                            try:
+                                ext = await verify_external_coordinate(
+                                    self.challenge, coord_text)
+                            except Exception:
+                                ext = ExternalCoordVerdict(
+                                    False, False, "外部校验暂时不可用")
+                            if ext.verified:
+                                verified = True
+                                reason = ext.message
+                                checker_code = "coord_verified"
+                            elif ext.definitive:
+                                reason = ext.message
+                                checker_code = "coord_candidate_checker_rejected"
+                            else:
+                                reason = ext.message
+                                checker_code = "coord_candidate_checker_unavailable"
                 if not accepted:
                     code = "coord_rejected"
                 elif verified:
                     code = "coord_verified"
+                elif checker_code:
+                    code = checker_code
                 else:
                     code = "coord_candidate"
                 detail = reason
@@ -4517,6 +4557,16 @@ class CliSolver:
         or the verifier is cooling down."""
         if not self._verifier_rate_limited():
             return ""
+        if getattr(self.challenge, "mode", "ctf") == "geocache":
+            return (
+                "\n## Verifier submission discipline (host submits once)\n"
+                "The Muteki host runs the one rate-limited `gc check`. "
+                "Do not run `gc check` yourself. 不要运行 gc check。\n"
+                "When a real-output candidate is ready, print "
+                "`READY_TO_SUBMIT=<coord>`, claim "
+                "`verifier:geocheck@<gc_code>` with risk class rate-limited, "
+                "then submit-coord."
+            )
         lines = [
             "\n## Verifier submission discipline (this target rate-limits submissions)",
             "The target's scoring verifier punishes wrong/concurrent submissions with "

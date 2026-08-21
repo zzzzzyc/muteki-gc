@@ -97,6 +97,7 @@ blackboard.py submit-flag '<flag>'
 当前题目是 geocache 时，额外使用 `gc-blackboard` 技能和 `coord_calc.py`。先读
 directives / review / deadends，再读 facts / routes / branches。死路表示一条解读、
 密码轴或投影假设已被证伪。坐标用 `submit-coord` 提交，不要使用 `submit-flag` 或
-`FOUND_FLAG`。本地接受的 candidate 不会结束任务。若存在 `geocheck_url`，在
-`gc check` 前领取 `verifier:geocheck@<gc_code>`（`--risk-class rate-limited`），
-结束后释放。
+`FOUND_FLAG`。本地接受的 candidate 不会结束任务。若存在 `geocheck_url`，打印
+`READY_TO_SUBMIT=<coord>`，在 `submit-coord` 前领取
+`verifier:geocheck@<gc_code>`（`--risk-class rate-limited`），结束后释放。
+不要运行 gc check；由 Muteki host 只提交一次。
