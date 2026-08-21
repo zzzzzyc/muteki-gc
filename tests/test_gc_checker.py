@@ -7,8 +7,10 @@ executables and an injected runner stand in for the CLI.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import signal
 import stat
 import textwrap
 import time
@@ -24,6 +26,7 @@ from muteki.solver.gc_checker import (
     _reset_checker_state_for_tests,
     verify_external_coordinate,
 )
+from muteki.swarm.shared_graph import SQLiteSharedGraph
 from muteki.vendor.geocaching_cli.coord import format_dmm, parse_coord
 
 from tests.test_gc_gate import (
@@ -95,16 +98,7 @@ def _echo_gc(tmp_path: Path, *, returncode: int = 0, stdout: str = "", stderr: s
         root = Path({str(tmp_path)!r})
         (root / "gc-argv.json").write_text(json.dumps(sys.argv), encoding="utf-8")
         (root / "gc-cwd.txt").write_text(os.getcwd(), encoding="utf-8")
-        env = {{
-            key: os.environ.get(key, "")
-            for key in os.environ
-            if key.startswith((
-                "OPENAI_", "ANTHROPIC_", "DEEPSEEK_", "MUTEKI_DEEPSEEK_",
-                "CURSOR_API_KEY", "XAI_", "GROK_", "GEOCACHING_",
-                "HOME", "PATH",
-            )) or key in ("CURSOR_API_KEY",)
-        }}
-        (root / "gc-env.json").write_text(json.dumps(env), encoding="utf-8")
+        (root / "gc-env.json").write_text(json.dumps(dict(os.environ)), encoding="utf-8")
         sys.stdout.write(Path({str(out_path)!r}).read_text(encoding="utf-8"))
         sys.stderr.write(Path({str(err_path)!r}).read_text(encoding="utf-8"))
         raise SystemExit({returncode})
@@ -179,14 +173,19 @@ def test_executable_precedence_explicit_then_env_then_which(tmp_path, monkeypatc
 
     (tmp_path / "explicit-gc.ran").unlink(missing_ok=True)
     _reset_checker_state_for_tests()
+    monkeypatch.setenv(
+        "MUTEKI_GC_CLI_SHA256",
+        hashlib.sha256(env_bin.read_bytes()).hexdigest(),
+    )
     assert _run(_check(None)).verified is True
     assert (tmp_path / "env-gc.ran").read_text() == "env-gc"
     assert not (tmp_path / "which-gc.ran").exists()
 
     monkeypatch.delenv("MUTEKI_GC_CLI")
+    monkeypatch.delenv("MUTEKI_GC_CLI_SHA256", raising=False)
     _reset_checker_state_for_tests()
-    assert _run(_check(None)).verified is True
-    assert (tmp_path / "which-gc.ran").read_text() == "which-gc"
+    assert _run(_check(None)).verified is False
+    assert not (tmp_path / "which-gc.ran").exists()
     seen.append("ok")
     assert seen == ["ok"]
 
@@ -239,6 +238,12 @@ def test_strips_model_secrets_but_keeps_geocaching_and_path(tmp_path, monkeypatc
     monkeypatch.setenv("CURSOR_API_KEY", secret)
     monkeypatch.setenv("XAI_API_KEY", secret)
     monkeypatch.setenv("GROK_API_KEY", secret)
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_github_secret")
+    monkeypatch.setenv("GH_TOKEN", "ghp_github_secret")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws_secret")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAsecret")
+    monkeypatch.setenv("OAUTH_TOKEN", "oauth_secret")
+    monkeypatch.setenv("GITHUB_OAUTH_TOKEN", "gho_oauth_secret")
     monkeypatch.setenv("GEOCACHING_COOKIE", cookie)
     monkeypatch.setenv("GEOCACHING_USERNAME", "alice")
     home = os.environ.get("HOME") or str(Path.home())
@@ -254,6 +259,8 @@ def test_strips_model_secrets_but_keeps_geocaching_and_path(tmp_path, monkeypatc
     for key in (
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY",
         "MUTEKI_DEEPSEEK_KEY", "CURSOR_API_KEY", "XAI_API_KEY", "GROK_API_KEY",
+        "GITHUB_TOKEN", "GH_TOKEN", "AWS_SECRET_ACCESS_KEY", "AWS_ACCESS_KEY_ID",
+        "OAUTH_TOKEN", "GITHUB_OAUTH_TOKEN",
     ):
         assert key not in env or env[key] == ""
     assert env["GEOCACHING_COOKIE"] == cookie
@@ -676,3 +683,249 @@ def test_prompt_and_skill_say_host_submits_worker_does_not_run_checker():
     exec_prompt = solver._build_prompt()
     assert "before `gc check`" not in exec_prompt
     assert "then run the verifier ONCE" not in exec_prompt
+
+
+# ── review findings ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("invalidated", [_SLOT_DMM, _SLOT_CANDIDATE])
+def test_operator_invalidated_coord_skips_checker_and_rejects(
+    tmp_path, monkeypatch, invalidated,
+):
+    fake = _patch_verify(monkeypatch, ExternalCoordVerdict(True, True, "不应调用"))
+    ch = _gc(digit_checksum=None)
+    graph = SQLiteSharedGraph(str(tmp_path / "sg.db"), ch)
+    graph.reopen_after_false_positive(actor="operator", flag=invalidated)
+    solver = _cli(ch, tmp_path, shared_graph=graph, bus=_CaptureBus())
+    _seed_output(solver, f"worksheet {_SLOT_CANDIDATE}")
+    _submit_and_drain(solver)
+    assert fake.calls == []
+    assert solver.graph.flags == []
+    assert solver.shared_graph.snapshot().flags == []
+    decisions = [
+        ev["payload"]
+        for ev in solver.shared_graph.events()
+        if ev["kind"] == "flag_submission_decision"
+    ]
+    assert decisions
+    assert decisions[-1]["accepted"] is False
+    assert decisions[-1]["code"] in {
+        "coord_rejected", "coord_rejected_operator",
+    }
+    assert all(item["code"] != "coord_verified" for item in decisions)
+
+
+def test_malicious_path_executable_is_rejected(tmp_path, monkeypatch):
+    evil_dir = tmp_path / "evil-bin"
+    evil_dir.mkdir()
+    ran = evil_dir / "RAN"
+    evil = evil_dir / "gc"
+    _write_exec(
+        evil,
+        f"""\
+        #!/usr/bin/env python3
+        from pathlib import Path
+        Path({str(ran)!r}).write_text("pwned")
+        """,
+    )
+    monkeypatch.delenv("MUTEKI_GC_CLI", raising=False)
+    monkeypatch.delenv("MUTEKI_GC_CLI_SHA256", raising=False)
+    monkeypatch.setattr(
+        "muteki.solver.gc_checker.shutil.which",
+        lambda name: str(evil) if name == "gc" else None,
+    )
+    verdict = _run(verify_external_coordinate(_gc(), _SLOT_DMM))
+    assert verdict.verified is False
+    assert verdict.definitive is False
+    assert not ran.exists()
+
+
+def test_path_fallback_allows_root_owned_system_binary(tmp_path, monkeypatch):
+    fake_path = "/usr/bin/gc"
+    monkeypatch.delenv("MUTEKI_GC_CLI", raising=False)
+    monkeypatch.delenv("MUTEKI_GC_CLI_SHA256", raising=False)
+    monkeypatch.setattr(
+        "muteki.solver.gc_checker.shutil.which",
+        lambda name: fake_path if name == "gc" else None,
+    )
+    real_stat = os.stat
+
+    def fake_stat(path, *args, **kwargs):
+        if str(path) == fake_path:
+            template = real_stat(__file__)
+            vals = list(template)
+            vals[0] = stat.S_IFREG | 0o755
+            vals[4] = 0
+            return os.stat_result(vals)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr("os.stat", fake_stat)
+    monkeypatch.setattr("muteki.solver.gc_checker.os.stat", fake_stat)
+
+    real_access = os.access
+
+    def fake_access(path, mode, *args, **kwargs):
+        if str(path) == fake_path:
+            return True
+        return real_access(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr("os.access", fake_access)
+    monkeypatch.setattr("muteki.solver.gc_checker.os.access", fake_access)
+
+    spawned: list[str] = []
+
+    class _Done:
+        returncode = 0
+        pid = 9
+
+        async def communicate(self):
+            return _stdout().encode(), b""
+
+        def kill(self):
+            return None
+
+    async def fake_exec(*args, **_kwargs):
+        spawned.append(args[0])
+        return _Done()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    verdict = _run(verify_external_coordinate(_gc(), _SLOT_DMM))
+    assert verdict.verified is True
+    assert spawned == [fake_path]
+
+
+def test_user_owned_env_cli_requires_sha256(tmp_path, monkeypatch):
+    script = _echo_gc(tmp_path, stdout=_stdout())
+    monkeypatch.setenv("MUTEKI_GC_CLI", str(script))
+    monkeypatch.delenv("MUTEKI_GC_CLI_SHA256", raising=False)
+    verdict = _run(verify_external_coordinate(_gc(), _SLOT_DMM))
+    assert verdict.verified is False
+    assert verdict.definitive is False
+    assert not (tmp_path / "gc-argv.json").exists()
+
+
+def test_env_cli_sha256_match_allows_spawn(tmp_path, monkeypatch):
+    script = _echo_gc(tmp_path, stdout=_stdout())
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    monkeypatch.setenv("MUTEKI_GC_CLI", str(script))
+    monkeypatch.setenv("MUTEKI_GC_CLI_SHA256", digest.upper())
+    verdict = _run(verify_external_coordinate(_gc(), _SLOT_DMM))
+    assert verdict.verified is True
+    assert (tmp_path / "gc-argv.json").is_file()
+
+
+def test_env_cli_sha256_mismatch_does_not_spawn(tmp_path, monkeypatch):
+    script = _echo_gc(tmp_path, stdout=_stdout())
+    monkeypatch.setenv("MUTEKI_GC_CLI", str(script))
+    monkeypatch.setenv("MUTEKI_GC_CLI_SHA256", "0" * 64)
+    verdict = _run(verify_external_coordinate(_gc(), _SLOT_DMM))
+    assert verdict.verified is False
+    assert verdict.definitive is False
+    assert not (tmp_path / "gc-argv.json").exists()
+
+
+def test_cli_solver_production_path_passes_no_explicit_executable(
+    tmp_path, monkeypatch,
+):
+    captured: dict = {}
+
+    async def fake(challenge, coord_text, **kw):
+        captured["kwargs"] = kw
+        captured["args"] = (challenge.id, coord_text)
+        return ExternalCoordVerdict(False, False, "外部校验暂时不可用")
+
+    monkeypatch.setattr(
+        "muteki.solver.cli_solver.verify_external_coordinate", fake)
+    solver = _cli(_gc(digit_checksum=None), tmp_path, bus=_CaptureBus())
+    _seed_output(solver, f"worksheet {_SLOT_CANDIDATE}")
+    _submit_and_drain(solver)
+    assert captured
+    assert captured["kwargs"].get("executable") is None
+    assert captured["kwargs"].get("runner") is None
+
+
+def test_timeout_kills_exact_process_group_not_by_name(tmp_path, monkeypatch):
+    recorded: dict = {}
+
+    class _FakeProc:
+        pid = 4242
+
+        async def communicate(self):
+            if "killpg" not in recorded and "proc_kill" not in recorded:
+                await asyncio.sleep(30)
+            recorded["communicated"] = True
+            return b"", b""
+
+        def kill(self):
+            recorded["proc_kill"] = True
+
+    async def fake_exec(*_args, **kwargs):
+        recorded["start_new_session"] = kwargs.get("start_new_session")
+        recorded["argv0"] = _args[0] if _args else None
+        return _FakeProc()
+
+    def fake_getpgid(pid):
+        recorded["getpgid"] = pid
+        return 4242
+
+    def fake_killpg(pgid, sig):
+        recorded["killpg"] = (pgid, sig)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("muteki.solver.gc_checker.os.getpgid", fake_getpgid)
+    monkeypatch.setattr("muteki.solver.gc_checker.os.killpg", fake_killpg)
+    script = _echo_gc(tmp_path, stdout=_stdout())
+    digest = hashlib.sha256(script.read_bytes()).hexdigest()
+    monkeypatch.setenv("MUTEKI_GC_CLI", str(script))
+    monkeypatch.setenv("MUTEKI_GC_CLI_SHA256", digest)
+    verdict = _run(verify_external_coordinate(_gc(), _SLOT_DMM, timeout_s=0.05))
+    assert verdict.verified is False
+    assert verdict.definitive is False
+    assert recorded.get("start_new_session") is True
+    assert recorded.get("getpgid") == 4242
+    assert recorded.get("killpg") == (4242, signal.SIGKILL)
+    assert "proc_kill" not in recorded
+    assert recorded.get("communicated") is True
+    source = Path(
+        __import__("muteki.solver.gc_checker", fromlist=["x"]).__file__
+    ).read_text(encoding="utf-8")
+    assert "pkill" not in source
+    assert "killall" not in source
+    assert "kill -9" not in source
+
+
+def test_empty_challenge_id_lock_includes_name_and_url():
+    calls: list[str] = []
+
+    async def runner(argv, **_kw):
+        calls.append(argv[argv.index("--url") + 1])
+        await asyncio.sleep(0.02)
+        return CompletedProcess(argv, 0, stdout=_stdout(), stderr="")
+
+    alpha = _gc(id="", name="alpha-cache", geocheck_url=_CHECK_URL)
+    beta = _gc(id="", name="beta-cache", geocheck_url=_CHECK_URL)
+
+    async def both():
+        return await asyncio.gather(
+            verify_external_coordinate(alpha, _SLOT_DMM, runner=runner),
+            verify_external_coordinate(beta, _SLOT_DMM, runner=runner),
+        )
+
+    a_res, b_res = _run(both())
+    assert a_res.verified and b_res.verified
+    assert calls.count(_CHECK_URL) == 2
+
+    _reset_checker_state_for_tests()
+    calls.clear()
+    twin_a = _gc(id="", name="same-cache", geocheck_url=_CHECK_URL)
+    twin_b = _gc(id="", name="same-cache", geocheck_url=_CHECK_URL)
+
+    async def twins():
+        return await asyncio.gather(
+            verify_external_coordinate(twin_a, _SLOT_DMM, runner=runner),
+            verify_external_coordinate(twin_b, _SLOT_DMM, runner=runner),
+        )
+
+    t1, t2 = _run(twins())
+    assert t1.verified and t2.verified
+    assert len(calls) == 1

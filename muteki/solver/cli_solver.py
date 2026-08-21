@@ -3584,33 +3584,39 @@ class CliSolver:
                             reason = f"坐标来源不受信任：{origin}"
                 checker_code = ""
                 if accepted and not verified:
-                    geocheck_url = str(
-                        getattr(self.challenge, "geocheck_url", "") or ""
-                    ).strip()
-                    if geocheck_url:
-                        origin = (
-                            self._origin_tainted(coord)
-                            or self._origin_tainted(coord_text)
-                        )
-                        if origin is not None:
-                            reason = "坐标来源不受信任，不能升级为外部校验"
-                        else:
-                            try:
-                                ext = await verify_external_coordinate(
-                                    self.challenge, coord_text)
-                            except Exception:
-                                ext = ExternalCoordVerdict(
-                                    False, False, "外部校验暂时不可用")
-                            if ext.verified:
-                                verified = True
-                                reason = ext.message
-                                checker_code = "coord_verified"
-                            elif ext.definitive:
-                                reason = ext.message
-                                checker_code = "coord_candidate_checker_rejected"
+                    rejected = self._rejected_flags()
+                    if coord in rejected or coord_text in rejected:
+                        accepted = False
+                        verified = False
+                        reason = "操作者已将此坐标标为误报，永久拒绝"
+                    else:
+                        geocheck_url = str(
+                            getattr(self.challenge, "geocheck_url", "") or ""
+                        ).strip()
+                        if geocheck_url:
+                            origin = (
+                                self._origin_tainted(coord)
+                                or self._origin_tainted(coord_text)
+                            )
+                            if origin is not None:
+                                reason = "坐标来源不受信任，不能升级为外部校验"
                             else:
-                                reason = ext.message
-                                checker_code = "coord_candidate_checker_unavailable"
+                                try:
+                                    ext = await verify_external_coordinate(
+                                        self.challenge, coord_text)
+                                except Exception:
+                                    ext = ExternalCoordVerdict(
+                                        False, False, "外部校验暂时不可用")
+                                if ext.verified:
+                                    verified = True
+                                    reason = ext.message
+                                    checker_code = "coord_verified"
+                                elif ext.definitive:
+                                    reason = ext.message
+                                    checker_code = "coord_candidate_checker_rejected"
+                                else:
+                                    reason = ext.message
+                                    checker_code = "coord_candidate_checker_unavailable"
                 if not accepted:
                     code = "coord_rejected"
                 elif verified:

@@ -8,9 +8,11 @@ or prose never count.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
+import signal
 import stat
 import tempfile
 from collections.abc import Awaitable, Callable
@@ -31,15 +33,24 @@ MSG_UNAVAILABLE = "外部校验暂时不可用"
 MSG_VERIFIED = "外部校验通过"
 MSG_REJECTED = "外部校验未通过"
 
-_SECRET_PREFIXES = (
-    "OPENAI_",
-    "ANTHROPIC_",
-    "DEEPSEEK_",
-    "MUTEKI_DEEPSEEK_",
-    "XAI_",
-    "GROK_",
-)
-_SECRET_KEYS = frozenset({"CURSOR_API_KEY"})
+_ENV_EXACT = frozenset({
+    "HOME",
+    "PATH",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "TZ",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "PLAYWRIGHT_BROWSERS_PATH",
+    "XDG_DATA_HOME",
+})
+_ENV_PREFIXES = ("GEOCACHING_", "LC_", "SSL_")
 
 _REQUIRED_TYPES: dict[str, type] = {
     "ok": bool,
@@ -85,6 +96,16 @@ def _lock_for(key: tuple[str, str]) -> asyncio.Lock:
     return lock
 
 
+def _challenge_identity(challenge: Challenge) -> tuple[str, str]:
+    cid = str(getattr(challenge, "id", "") or "").strip()
+    name = str(getattr(challenge, "name", "") or "").strip()
+    url = str(getattr(challenge, "geocheck_url", "") or "").strip()
+    ident = "|".join(part for part in (cid, name, url) if part)
+    if not ident:
+        ident = "geocache"
+    return (ident, url)
+
+
 def _canonical_coord(text: str) -> str | None:
     try:
         return format_dmm(parse_coord(text))
@@ -95,24 +116,105 @@ def _canonical_coord(text: str) -> str | None:
 def _checker_env() -> dict[str, str]:
     env: dict[str, str] = {}
     for key, value in os.environ.items():
-        if key in _SECRET_KEYS:
-            continue
-        if any(key.startswith(prefix) for prefix in _SECRET_PREFIXES):
-            continue
-        env[key] = value
+        if key in _ENV_EXACT or key.startswith(_ENV_PREFIXES):
+            env[key] = value
     return env
+
+
+def _is_unsafe_location(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return True
+    text = str(resolved).replace("\\", "/")
+    roots: list[str] = []
+    try:
+        roots.append(str(Path.home().resolve()).replace("\\", "/"))
+    except OSError:
+        pass
+    roots.append(str(Path(tempfile.gettempdir()).resolve()).replace("\\", "/"))
+    roots.append("/tmp")
+    roots.append("/var/tmp")
+    try:
+        roots.append(str(Path.cwd().resolve()).replace("\\", "/"))
+    except OSError:
+        pass
+    for extra in (
+        os.environ.get("MUTEKI_WORKSPACE"),
+        os.environ.get("MUTEKI_SESSION_DIR"),
+    ):
+        if extra:
+            try:
+                roots.append(str(Path(extra).resolve()).replace("\\", "/"))
+            except OSError:
+                roots.append(str(extra).replace("\\", "/"))
+    for root in roots:
+        root = root.rstrip("/") or root
+        if text == root or text.startswith(root + "/"):
+            return True
+    lowered = text.lower()
+    if "/sessions/" in lowered or "/workspace/" in lowered:
+        return True
+    return False
+
+
+def _group_or_world_writable(mode: int) -> bool:
+    return bool(mode & (stat.S_IWGRP | stat.S_IWOTH))
+
+
+def _expected_sha256() -> str:
+    return (os.environ.get("MUTEKI_GC_CLI_SHA256") or "").strip().lower()
+
+
+def _sha256_matches(path: str) -> bool:
+    expected = _expected_sha256()
+    if not expected:
+        return True
+    try:
+        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return digest == expected
+
+
+def _is_trusted_executable(resolved: Path, *, source: str) -> bool:
+    try:
+        st = os.stat(resolved)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    if not os.access(resolved, os.X_OK):
+        return False
+    if _group_or_world_writable(st.st_mode):
+        return False
+    if source == "explicit":
+        return True
+    if source == "env":
+        euid = os.geteuid()
+        if st.st_uid == euid and euid != 0 and not _expected_sha256():
+            return False
+        return True
+    if st.st_uid != 0:
+        return False
+    if _is_unsafe_location(resolved):
+        return False
+    return True
 
 
 def _resolve_executable(explicit: str | None) -> str | None:
     if explicit:
         raw = explicit
+        source = "explicit"
     elif os.environ.get("MUTEKI_GC_CLI"):
         raw = os.environ["MUTEKI_GC_CLI"]
+        source = "env"
     else:
         found = shutil.which("gc")
         if not found:
             return None
         raw = found
+        source = "path"
     path = Path(raw)
     if not path.is_absolute():
         return None
@@ -120,13 +222,7 @@ def _resolve_executable(explicit: str | None) -> str | None:
         resolved = path.resolve()
     except OSError:
         return None
-    try:
-        st = resolved.stat()
-    except OSError:
-        return None
-    if not stat.S_ISREG(st.st_mode):
-        return None
-    if not os.access(resolved, os.X_OK):
+    if not _is_trusted_executable(resolved, source=source):
         return None
     return str(resolved)
 
@@ -154,6 +250,21 @@ def _parse_checker_object(stdout: str) -> dict | None:
     return obj
 
 
+def _kill_process_tree(proc: asyncio.subprocess.Process) -> None:
+    pid = getattr(proc, "pid", None)
+    if pid and hasattr(os, "getpgid") and hasattr(os, "killpg"):
+        try:
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+
+
 async def _default_runner(
     argv: list[str],
     *,
@@ -161,22 +272,22 @@ async def _default_runner(
     env: dict[str, str],
     timeout: float,
 ) -> CompletedProcess[str]:
-    proc = await asyncio.create_subprocess_exec(
-        argv[0],
-        *argv[1:],
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=cwd,
-        env=env,
-    )
+    if not _sha256_matches(argv[0]):
+        raise PermissionError("gc cli hash mismatch")
+    kwargs: dict = {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.PIPE,
+        "cwd": cwd,
+        "env": env,
+    }
+    if os.name == "posix":
+        kwargs["start_new_session"] = True
+    proc = await asyncio.create_subprocess_exec(argv[0], *argv[1:], **kwargs)
     try:
         stdout_b, stderr_b = await asyncio.wait_for(
             proc.communicate(), timeout=timeout)
     except asyncio.TimeoutError:
-        try:
-            proc.kill()
-        except ProcessLookupError:
-            pass
+        _kill_process_tree(proc)
         try:
             await proc.communicate()
         except Exception:
@@ -262,8 +373,8 @@ async def verify_external_coordinate(
     if requested is None:
         return ExternalCoordVerdict(False, False, MSG_MALFORMED)
 
-    key = (str(getattr(challenge, "id", "") or ""), url)
-    cache_key = (key[0], url, requested)
+    key = _challenge_identity(challenge)
+    cache_key = (key[0], key[1], requested)
     lock = _lock_for(key)
     async with lock:
         cached = _CACHE.get(cache_key)
