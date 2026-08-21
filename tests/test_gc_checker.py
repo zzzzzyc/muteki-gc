@@ -110,6 +110,10 @@ def _echo_gc(tmp_path: Path, *, returncode: int = 0, stdout: str = "", stderr: s
 @pytest.fixture(autouse=True)
 def _isolate_checker(monkeypatch):
     monkeypatch.setenv("MUTEKI_GC_CLI", "/nonexistent/muteki-gc-checker-sentinel")
+    # A repo-root .env may pin MUTEKI_GC_CLI_SHA256 (loaded process-wide by the
+    # apps.web.server import in unrelated test files). Clear it or every fake
+    # executable fails the hash gate.
+    monkeypatch.delenv("MUTEKI_GC_CLI_SHA256", raising=False)
     _reset_checker_state_for_tests()
     yield
     _reset_checker_state_for_tests()
@@ -688,6 +692,35 @@ def test_prompt_and_skill_say_host_submits_worker_does_not_run_checker():
     exec_prompt = solver._build_prompt()
     assert "before `gc check`" not in exec_prompt
     assert "then run the verifier ONCE" not in exec_prompt
+
+
+def test_checker_rejected_coords_joins_submission_decisions(tmp_path):
+    """The geocache Known-BAD block reads checker-FAILED coordinates from the
+    durable submission log, so a respawned worker never re-submits them."""
+    ch = _gc()
+    graph = SQLiteSharedGraph(str(tmp_path / "sg.db"), ch)
+    graph.flag_submission(
+        actor="cli-1", submission_id="fs-bad", submission_kind="coord",
+        coord="N 40 03.541 E 116 36.008")
+    graph.flag_submission_decision(
+        actor="coordinator", submission_id="fs-bad", accepted=False,
+        code="coord_candidate_checker_rejected", detail="外部校验未通过")
+    graph.flag_submission(
+        actor="cli-2", submission_id="fs-good", submission_kind="coord",
+        coord="N 40 03.514 E 116 36.035")
+    graph.flag_submission_decision(
+        actor="coordinator", submission_id="fs-good", accepted=True,
+        code="coord_verified", detail="外部校验通过")
+    # a non-definitive checker outcome is NOT a known-bad coordinate
+    graph.flag_submission(
+        actor="cli-3", submission_id="fs-maybe", submission_kind="coord",
+        coord="N 40 03.500 E 116 36.050")
+    graph.flag_submission_decision(
+        actor="coordinator", submission_id="fs-maybe", accepted=False,
+        code="coord_candidate_checker_unavailable", detail="外部校验暂时不可用")
+
+    assert graph.checker_rejected_coords() == {"N 40 03.541 E 116 36.008"}
+    graph.close()
 
 
 # ── review findings ──────────────────────────────────────────────────────────

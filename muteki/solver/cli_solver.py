@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -597,18 +598,24 @@ _GC_EXEC_PROMPT = (
     "  gc show <GC> --json\n"
     "If geocheck_url is set, print `READY_TO_SUBMIT=<coord>` and claim "
     "`verifier:geocheck@<gc_code>` with risk class rate-limited before "
-    "submit-coord, then release it. Do not run `gc check` yourself — the "
-    "Muteki host submits the checker once. 不要运行 gc check。\n\n"
+    "submit-coord, then release it. Do not run `gc check` yourself and do not "
+    "open the checker site (geocheck.org / geotjek.dk / certitude) — the "
+    "Muteki host submits the checker once. 不要运行 gc check，也不要自己打开 "
+    "checker 网页。\n\n"
     "Print team markers from REAL output only:\n"
     "  VERIFIED_FACT=<confirmed finding + witness path>\n"
     "  DEADEND=<a reading/cipher/projection hypothesis you disproved>\n"
     "A locally accepted candidate does not finish the run. Checksum or host "
     "checker verification does. Do not claim completion in prose.\n"
+    "Before every submit-coord, run read-deadends and read-facts first: a "
+    "coordinate that already FAILED the checker or was invalidated by the "
+    "operator (listed under Known-BAD coordinates) must NEVER be submitted or "
+    "re-derived — mark it DEADEND and change axis.\n"
     "When a coordinate candidate appears in REAL tool output, submit it with:\n"
     "  python3 \"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'\n"
     "Do not search the web for a cache writeup as a substitute for solving. "
-    "Configured web access may still be used for the listing, checker, or a "
-    "reference you actually need.\n\n"
+    "Configured web access may still be used for the listing or a reference "
+    "you actually need — never for the checker.\n\n"
     "## If you are BLOCKED on something only the operator can give you\n"
     "  NEED_INPUT=<the ONE specific thing the operator must supply>\n"
     "  NEED_KIND=<external_blocker|lane_lock_request|route_dead_end|worker_uncertainty|operator_directive_needed>\n"
@@ -634,10 +641,15 @@ _GC_EXPLORE_PROMPT = (
     "  NEED_KIND=<external_blocker|lane_lock_request|route_dead_end|worker_uncertainty|operator_directive_needed>\n"
     "If geocheck_url is set, print `READY_TO_SUBMIT=<coord>` and claim "
     "`verifier:geocheck@<gc_code>` (rate-limited) before submit-coord. "
-    "Do not run `gc check` yourself — Muteki host submits once. 不要运行 gc check。\n"
+    "Do not run `gc check` yourself and never open the checker site "
+    "(geocheck.org / geotjek.dk / certitude) — Muteki host submits once. "
+    "不要运行 gc check，也不要自己打开 checker 网页。\n"
     "  python3 \"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'  "
     "(only after REAL output produced it)\n"
-    "Read-deadends before starting. A candidate is not verified. Do not claim "
+    "Read-deadends before starting AND before every submit-coord. A coordinate "
+    "that already FAILED the checker or was invalidated (Known-BAD "
+    "coordinates) must never be re-submitted or re-derived — mark it DEADEND "
+    "and change axis. A candidate is not verified. Do not claim "
     "completion in prose. Do not search for a writeup as a substitute for solving."
 )
 
@@ -681,7 +693,10 @@ _GC_REVIEW_PROMPT = (
 _GC_RESUME_PROMPT = (
     "CONCLUDE: stop exploring now. If you already saw a coordinate candidate in "
     "REAL tool output this session, submit it through `python3 "
-    "\"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'`. A locally accepted "
+    "\"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'` — unless it is "
+    "listed as a Known-BAD coordinate (already checker-FAILED or invalidated); "
+    "those are dead ends, report them as DEADEND instead of re-submitting. A "
+    "locally accepted "
     "candidate does not finish the run. Otherwise report the furthest confirmed "
     "fact. Do not guess. Do not claim completion in prose."
 )
@@ -693,7 +708,8 @@ _GC_EXPLORE_CONCLUDE_PROMPT = (
     "  VERIFIED_FACT=<a confirmed finding from real output>\n"
     "  DEADEND=<why this direction failed>\n"
     "  python3 \"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'  "
-    "(only if seen in real output this session)\n"
+    "(only if seen in real output this session, and NOT one of the Known-BAD "
+    "coordinates that already FAILED the checker)\n"
     "If you found nothing, output DEADEND=<reason>. Do not guess. Do not claim "
     "completion in prose."
 )
@@ -1607,6 +1623,54 @@ class CliSolver:
             "project muteki-blackboard script is unavailable; "
             "user-level Skill directories are not a Worker fallback")
 
+    def _gc_check_blocking_shim_dir(self, cwd: Optional[str]) -> str:
+        """Geocache local workers: shadow `gc` with a wrapper that refuses
+        `gc check` (host-only, rate-limited) and delegates every other
+        subcommand to the trusted host binary. Returns the shim directory to
+        prepend to PATH, or "" when there is nothing to shadow.
+
+        run-1994: a Cursor worker burned the shared geocheck rate limit by
+        driving the checker itself. Prompts already forbid it; this is the
+        execution-surface backstop. Containers ship no `gc` binary at all, and
+        there is no gc to shadow when the host has none resolvable — both
+        cases need no shim."""
+        if getattr(self.challenge, "mode", "ctf") != "geocache":
+            return ""
+        if self.container is not None or os.name == "nt":
+            return ""
+        try:
+            from muteki.solver.gc_checker import _resolve_executable
+
+            real = _resolve_executable(None)
+        except Exception:
+            real = None
+        if not real:
+            return ""
+        root = (cwd or self._workdir) or ""
+        if not root:
+            return ""
+        shim_dir = Path(root).resolve() / ".muteki-gc-shim"
+        try:
+            shim_dir.mkdir(parents=True, exist_ok=True)
+            shim = shim_dir / "gc"
+            shim.write_text(
+                "#!/bin/sh\n"
+                "# Muteki geocache worker shim: `gc check` is host-only "
+                "(one rate-limited submission).\n"
+                'if [ "$1" = "check" ]; then\n'
+                '  echo "gc check is disabled for workers: print '
+                'READY_TO_SUBMIT=<coord> and submit-coord; the Muteki host '
+                'runs the checker once." >&2\n'
+                "  exit 2\n"
+                "fi\n"
+                f"exec {shlex.quote(real)} \"$@\"\n",
+                encoding="utf-8",
+            )
+            shim.chmod(0o755)
+        except OSError:
+            return ""
+        return str(shim_dir)
+
     def _worker_env(self, cwd: Optional[str] = None) -> dict:
         """Env vars handed to the worker subprocess.
 
@@ -1697,6 +1761,9 @@ class CliSolver:
                         pass
                 env["CLAUDE_CONFIG_DIR"] = config_path
         env["PATH"] = _stable_worker_path(env.get("PATH") or os.environ.get("PATH", ""))
+        gc_shim_dir = self._gc_check_blocking_shim_dir(cwd)
+        if gc_shim_dir:
+            env["PATH"] = gc_shim_dir + os.pathsep + env["PATH"]
         env["MUTEKI_WORKER_ID"] = self.solver_id
         intent_id = getattr(self, "intent_id_assigned", "") or getattr(self, "_intent_id", "") or ""
         if intent_id:
@@ -4567,11 +4634,15 @@ class CliSolver:
             return (
                 "\n## Verifier submission discipline (host submits once)\n"
                 "The Muteki host runs the one rate-limited `gc check`. "
-                "Do not run `gc check` yourself. 不要运行 gc check。\n"
+                "Do not run `gc check` yourself and do not open the checker "
+                "site (geocheck.org / geotjek.dk / certitude). "
+                "不要运行 gc check，也不要自己打开 checker 网页。\n"
                 "When a real-output candidate is ready, print "
                 "`READY_TO_SUBMIT=<coord>`, claim "
                 "`verifier:geocheck@<gc_code>` with risk class rate-limited, "
-                "then submit-coord."
+                "then submit-coord. Read dead-ends first: never re-submit a "
+                "coordinate that already FAILED the checker (Known-BAD "
+                "coordinates)."
             )
         lines = [
             "\n## Verifier submission discipline (this target rate-limits submissions)",
@@ -4667,8 +4738,9 @@ class CliSolver:
         checksum = getattr(c, "digit_checksum", None)
         if checksum is not None:
             lines.append(f"Digit checksum: {checksum}")
-        if getattr(c, "geocheck_url", ""):
-            lines.append(f"Checker URL: {c.geocheck_url}")
+        # The checker URL is deliberately NOT shown to workers: the Muteki host
+        # runs the one rate-limited `gc check`; a worker holding the URL tends to
+        # visit the checker site itself and burn the shared rate limit.
         radius = getattr(c, "anchor_radius_m", 3200.0)
         if radius is None:
             radius = 3200.0
@@ -4903,7 +4975,18 @@ class CliSolver:
         runs (a false positive happens in both); empty when nothing was rejected, so
         the prompt is byte-identical on the common path."""
         if getattr(self.challenge, "mode", "ctf") == "geocache":
-            return ""
+            bad_coords = sorted(self._rejected_coords())
+            if not bad_coords:
+                return ""
+            block = ["\n## Known-BAD coordinates (already FAILED the external "
+                     "checker or invalidated by the operator — do NOT submit or "
+                     "re-derive them):"]
+            block += [f"  - {coord}" for coord in bad_coords]
+            block.append(
+                "These coordinates are confirmed wrong. If your work leads back "
+                "to one, that reading is a dead end — mark DEADEND and pursue a "
+                "different axis.")
+            return "\n".join(block)
         bad = sorted(self._rejected_flags())
         if not bad:
             return ""
@@ -7358,6 +7441,31 @@ class CliSolver:
             return set(sg.invalidated_flags() or set())
         except Exception:
             return set()
+
+    def _rejected_coords(self) -> "set[str]":
+        """Geocache known-bad coordinates, durable across worker respawn.
+
+        Two sources, both read best-effort from the shared graph:
+        operator-invalidated values (for geocache the invalidated "flag" value
+        IS the coordinate — the same log `_rejected_flags` reads) and every
+        coordinate the host-run external checker definitively rejected. A fresh
+        worker after a reopen must see both, or it cheerfully re-derives and
+        re-submits the same checker-FAILED coordinate (run-1994)."""
+        sg = getattr(self, "shared_graph", None)
+        if sg is None:
+            return set()
+        out: set[str] = set()
+        try:
+            out |= {str(v) for v in (sg.invalidated_flags() or set()) if v}
+        except Exception:
+            pass
+        reader = getattr(sg, "checker_rejected_coords", None)
+        if callable(reader):
+            try:
+                out |= {str(v) for v in (reader() or set()) if v}
+            except Exception:
+                pass
+        return out
 
     def _accepted_flags_for_outcome(self) -> "list[str]":
         """Return accepted values to the owning runtime without public projection."""

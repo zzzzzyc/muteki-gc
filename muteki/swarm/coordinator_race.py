@@ -1285,6 +1285,36 @@ class _RaceHealthMixin:
             setattr(solver, "_muteki_lane_release_result", lane_release)
             setattr(solver, "_muteki_lane_released", True)
 
+        # Stage 2b: release cooperative resource locks this worker still holds
+        # (e.g. verifier:geocheck@<gc>). A timed-out verifier otherwise keeps
+        # the lock until lease expiry (600s default) and every sibling's claim
+        # LOSTs (run-1994: three verifier timeouts → "等待 verifier 释放" HITL).
+        if (self.shared_graph is not None
+                and not bool(getattr(solver, "_muteki_resources_released", False))):
+            active_reader = getattr(self.shared_graph, "active_resource_locks", None)
+            releaser = getattr(self.shared_graph, "release_resource_lock", None)
+            if callable(active_reader) and callable(releaser):
+                try:
+                    held = [
+                        row for row in (active_reader() or [])
+                        if str(row.get("owner_worker") or "") == sid
+                    ]
+                except Exception:
+                    return False
+                for row in held:
+                    try:
+                        release = releaser(
+                            actor="coordinator",
+                            resource_key=str(row.get("resource_key") or ""),
+                            lock_id=str(row.get("lock_id") or ""),
+                            by_worker=sid,
+                        )
+                    except Exception:
+                        return False
+                    if not bool(release.get("released")):
+                        return False
+            setattr(solver, "_muteki_resources_released", True)
+
         # Stage 3 (last durable edge): only now may a never-started intent reopen.
         # A started/uncertain intent is terminalized through an idempotent,
         # owner-fenced graph operation. Verification-read failure is fail-closed;

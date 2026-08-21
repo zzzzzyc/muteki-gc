@@ -6,6 +6,13 @@ and field preservation. Does not cover gate, prompt, UI tabs, or completion.
 
 from __future__ import annotations
 
+import hashlib
+import os
+import subprocess
+from pathlib import Path
+
+import pytest
+
 from muteki.models.solve_graph import Challenge
 from muteki.solver import cli_solver as _cli_solver
 from muteki.solver.cli_solver import CliSolver
@@ -244,7 +251,10 @@ def test_build_prompt_geocache_includes_listing_and_submit_coord():
     assert "-0.0005" in p
     assert "N 51° 2_.___ W 000° 0_.___" in p
     assert "17" in p
-    assert "https://geocheck.org/geo_check.php?gid=1" in p
+    # The checker URL is host-only: workers must not see it (they would visit
+    # the checker site themselves and burn the shared rate limit).
+    assert "https://geocheck.org/geo_check.php?gid=1" not in p
+    assert "Checker URL" not in p
     assert "submit-coord" in p
     assert "D3" in p and "D4" in p
     assert "3.2" in p or "3200" in p or "1500" in p
@@ -368,10 +378,14 @@ def test_explore_conclude_text_three_modes():
     assert "SUBMIT_REPORT=" in pentest
 
 
-def test_geocache_omits_flag_team_and_rejected_blocks_even_if_multiflag():
+def test_geocache_omits_flag_team_block_but_lists_known_bad_coords():
     class _Graph:
         def invalidated_flags(self):
-            return {"flag{false_positive}"}
+            # geocache: the invalidated "flag" value IS a coordinate.
+            return {"N 40 03.541 E 116 36.008"}
+
+        def checker_rejected_coords(self):
+            return {"N 40 03.514 E 116 36.035"}
 
         def snapshot(self):
             return type("S", (), {"flags": ["flag{one}"]})()
@@ -379,14 +393,72 @@ def test_geocache_omits_flag_team_and_rejected_blocks_even_if_multiflag():
     ch = _gc_challenge(expected_flags=3)
     s = _solver(ch, shared_graph=_Graph())
     assert s._team_context_block() == ""
-    assert s._rejected_flags_block() == ""
+    rejected = s._rejected_flags_block()
+    assert "Known-BAD coordinates" in rejected
+    assert "N 40 03.541 E 116 36.008" in rejected
+    assert "N 40 03.514 E 116 36.035" in rejected
+    assert "Known-BAD flags" not in rejected
     bootstrap = s._build_prompt()
     explore = s._build_explore_prompt()
     for prompt in (bootstrap, explore):
         assert "submit-flag" not in prompt
         assert "This challenge has 3 flags" not in prompt
         assert "Known-BAD flags" not in prompt
+        assert "Known-BAD coordinates" in prompt
         assert "submit-coord" in prompt
+
+
+def test_geocache_known_bad_block_empty_without_rejections():
+    class _Graph:
+        def invalidated_flags(self):
+            return set()
+
+        def checker_rejected_coords(self):
+            return set()
+
+        def snapshot(self):
+            return type("S", (), {"flags": []})()
+
+    s = _solver(_gc_challenge(), shared_graph=_Graph())
+    assert s._rejected_flags_block() == ""
+    # The static prompt references the Known-BAD list by name; the injected
+    # BLOCK (with actual coordinates) must be absent when nothing was rejected.
+    assert "## Known-BAD coordinates" not in s._build_prompt()
+
+
+# ── gc check execution-surface shim (run-1994) ───────────────────────────────
+
+
+@pytest.mark.skipif(os.name != "posix", reason="gc shim is a POSIX shell script")
+def test_gc_shim_blocks_check_and_delegates(tmp_path, monkeypatch):
+    real = tmp_path / "real-gc"
+    real.write_text('#!/bin/sh\necho delegated "$@"\n', encoding="utf-8")
+    real.chmod(0o755)
+    monkeypatch.setenv("MUTEKI_GC_CLI", str(real))
+    monkeypatch.setenv(
+        "MUTEKI_GC_CLI_SHA256", hashlib.sha256(real.read_bytes()).hexdigest())
+
+    solver = _solver(_gc_challenge())
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    shim_dir = solver._gc_check_blocking_shim_dir(str(workdir))
+    assert shim_dir
+    shim = Path(shim_dir) / "gc"
+    blocked = subprocess.run(
+        ["/bin/sh", str(shim), "check", "--url", "https://geocheck.org/x", "N 1"],
+        capture_output=True, text=True, timeout=10)
+    assert blocked.returncode == 2
+    assert "host" in blocked.stderr
+    delegated = subprocess.run(
+        ["/bin/sh", str(shim), "show", "GC8ABCD"],
+        capture_output=True, text=True, timeout=10)
+    assert delegated.returncode == 0
+    assert "delegated show GC8ABCD" in delegated.stdout
+
+
+def test_gc_shim_skipped_outside_geocache(tmp_path):
+    solver = _solver(Challenge(id="t", name="t", category="web"))
+    assert solver._gc_check_blocking_shim_dir(str(tmp_path)) == ""
 
 
 def test_geocache_listing_uses_effective_anchor_radius():

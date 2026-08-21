@@ -414,6 +414,22 @@ class _ReviewLocksMixin:
                     f"configured review engine unavailable: {configured}")
         return self._pick_engine([], healthy, role="review")
 
+    def _verifier_seat_configured(self) -> bool:
+        """True when ANY enabled profile may take role=verifier. Tells a
+        TRANSIENT verifier-capacity rejection (retry next tick) apart from a
+        PERMANENT no-verifier-seat configuration (conclude the intent instead
+        of requeue-spawning spawn_rejected every loop tick). Legacy mode (no
+        worker profiles) treats every healthy engine as verifier-capable."""
+        profiles = getattr(self, "worker_profiles", []) or []
+        if not profiles:
+            return True
+        for p in profiles:
+            if not isinstance(p, dict) or not p.get("enabled", True):
+                continue
+            if "verifier" in (p.get("roles") or []):
+                return True
+        return False
+
     def _select_verifier_engine(self, healthy: list[str]) -> str:
         configured = str(self.verifier_policy.get("engine") or "").strip()
         if configured:

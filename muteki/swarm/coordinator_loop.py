@@ -2526,14 +2526,41 @@ class _CoordinatorLoopMixin:
                         worker_role = "explore"
                     intent_lane = str(intent.get("lane_key") or "")
                     try:
-                        engine = self._pick_engine(
-                            _running_engines(), healthy, role=worker_role,
-                            intent_id=iid, lane=intent_lane,
-                            intent=intent, avoid_engines=batch_engines)
+                        if worker_class == "verifier":
+                            # Verifier intents honor the pinned verifier seat
+                            # (stage_policy.coordinator.verifier.engine) instead
+                            # of the heterogeneous free-for-all pick — otherwise
+                            # any idle seat, including slow/free-tier ones, can
+                            # absorb a verifier intent (run-1994: flash verifier
+                            # timed out in three straight generations).
+                            engine = self._select_verifier_engine(healthy)
+                        else:
+                            engine = self._pick_engine(
+                                _running_engines(), healthy, role=worker_role,
+                                intent_id=iid, lane=intent_lane,
+                                intent=intent, avoid_engines=batch_engines)
                     except RuntimeError as exc:
                         await _emit_bb("worker_spawn_rejected", reason=str(exc),
                                        phase=worker_mode, intent_id=iid)
-                        open_intents.insert(0, intent)
+                        if (worker_class == "verifier"
+                                and not self._verifier_seat_configured()):
+                            # PERMANENT config gap (no verifier-capable seat at
+                            # all), not transient capacity: requeueing would
+                            # re-emit spawn_rejected every loop tick forever.
+                            # Conclude the intent; the operator can pin a
+                            # verifier seat and reopen.
+                            try:
+                                if self.shared_graph is not None:
+                                    self.shared_graph.conclude_intent(
+                                        actor="coordinator", intent_id=iid,
+                                        result="cancelled",
+                                        result_detail=(
+                                            "no verifier-capable worker seat "
+                                            "configured"))
+                            except Exception:
+                                pass
+                        else:
+                            open_intents.insert(0, intent)
                         break
                     # build the worker FIRST so we can claim the intent under ITS
                     # unique solver_id — that makes the worker the intent's OWNER, so
