@@ -612,6 +612,7 @@ def test_infer_with_checker_url_sets_verifier_rate_limited():
         "prompt": "解 GC8ABCD",
         "challenge": {
             "mode": "geocache",
+            "gc_code": "GC8ABCD",
             "geocheck_url": _CHECK_URL,
         },
     })
@@ -620,7 +621,11 @@ def test_infer_with_checker_url_sets_verifier_rate_limited():
 
     without = _infer_challenge({
         "prompt": "解 GC8ABCD",
-        "challenge": {"mode": "geocache", "geocheck_url": ""},
+        "challenge": {
+            "mode": "geocache",
+            "gc_code": "GC8ABCD",
+            "geocheck_url": "",
+        },
     })
     assert without["challenge"].get("verifier_rate_limited") in (None, False)
 

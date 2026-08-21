@@ -75,6 +75,31 @@ def _challenge(mode: str = "geocache") -> Challenge:
         category="misc",
         mode=mode,
         description="gc session watchdog",
+        gc_code="GC8ABCD" if mode == "geocache" else "",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _bypass_gc_bootstrap(monkeypatch: pytest.MonkeyPatch):
+    """Task 6 fixtures exercise watchdog/HITL, not listing load.
+
+    Product geocache runs require a valid gc_code and a successful bootstrap
+    before health. Tests here supply a code and mock bootstrap success so the
+    existing supervisor paths still reach health without weakening validation.
+    """
+
+    async def _ok(*_a: Any, **_k: Any) -> dict[str, Any]:
+        return {"code": "GC8ABCD", "facts_added": 0}
+
+    monkeypatch.setattr(
+        "muteki.swarm.coordinator_loop.bootstrap_gc_challenge",
+        _ok,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "muteki.solver.gc_bootstrap.bootstrap_gc_challenge",
+        _ok,
+        raising=False,
     )
 
 

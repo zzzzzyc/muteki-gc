@@ -354,42 +354,90 @@ class _CoordinatorLoopMixin:
         async def _bootstrap_geocache_listing() -> None:
             if getattr(self.challenge, "mode", "") != "geocache":
                 return
-            if not str(getattr(self.challenge, "gc_code", "") or "").strip():
-                return
-            if self.shared_graph is None:
-                return
-            try:
-                summary = await bootstrap_gc_challenge(
-                    self.challenge, self.shared_graph)
-            except GcBootstrapError:
-                if self.bus is None:
+            need = (
+                "无法加载 Geocaching listing，请运行 gc auth login "
+                "或检查 GC code"
+            )
+            hitl_emitted = False
+            just_woke = False
+
+            def _bootstrap_pending() -> bool:
+                return any(
+                    str(h.get("worker", "")) == "gc-bootstrap"
+                    and str(h.get("need", "")).strip() == need
+                    for h in self._pending_help
+                )
+
+            async def _wait_for_operator(*, require_pending: bool) -> None:
+                if self._operator_event is None:
+                    raise GcBootstrapError(
+                        "geocache listing help channel is unavailable")
+                self._operator_event.clear()
+                if self._operator_stop:
+                    raise asyncio.CancelledError
+                if require_pending and not _bootstrap_pending():
                     return
-                need = (
-                    "无法加载 Geocaching listing，请运行 gc auth login "
-                    "或检查 GC code"
-                )
-                await self.bus.emit(Event(
-                    event_type=EventType.HITL_REQUEST,
-                    run_id=self.run_id,
-                    challenge_id=self.challenge.id,
-                    solver_id="gc-bootstrap",
-                    payload=hitl_request_payload(
-                        "gc-bootstrap", need,
-                        kind="env_down", need_kind="external_blocker",
-                    ),
-                ))
+                await self._operator_event.wait()
+                if self._operator_stop:
+                    raise asyncio.CancelledError
+
+            while True:
+                if self._operator_stop:
+                    raise asyncio.CancelledError
+                try:
+                    if self.shared_graph is None:
+                        raise GcBootstrapError(
+                            "geocache listing graph is unavailable")
+                    summary = await bootstrap_gc_challenge(
+                        self.challenge, self.shared_graph)
+                except GcBootstrapError:
+                    if self.bus is None:
+                        raise
+                    if not hitl_emitted:
+                        await self.bus.emit(Event(
+                            event_type=EventType.HITL_REQUEST,
+                            run_id=self.run_id,
+                            challenge_id=self.challenge.id,
+                            solver_id="gc-bootstrap",
+                            payload=hitl_request_payload(
+                                "gc-bootstrap", need,
+                                kind="env_down", need_kind="external_blocker",
+                            ),
+                        ))
+                        hitl_emitted = True
+                    if self._operator_stop:
+                        raise asyncio.CancelledError
+                    if not _bootstrap_pending():
+                        if just_woke:
+                            # Unrepaired wake: retry already ran. Restore the
+                            # same pending row without a second HITL event,
+                            # then wait again.
+                            just_woke = False
+                            self._pending_help.append(hitl_request_payload(
+                                "gc-bootstrap", need,
+                                kind="env_down", need_kind="external_blocker",
+                            ))
+                            await _wait_for_operator(require_pending=True)
+                            just_woke = True
+                            continue
+                        # Resolved during this attempt — retry immediately.
+                        just_woke = False
+                        continue
+                    await _wait_for_operator(require_pending=True)
+                    just_woke = True
+                    continue
+                if summary:
+                    sanitized = {
+                        key: summary[key]
+                        for key in (
+                            "code", "name", "posted", "difficulty", "terrain",
+                            "skeleton", "checker_url", "facts_added",
+                        )
+                        if key in summary
+                    }
+                    await self._emit_coord_bb(
+                        "gc_bootstrap_complete", **sanitized)
                 return
-            if not summary:
-                return
-            sanitized = {
-                key: summary[key]
-                for key in (
-                    "code", "name", "posted", "difficulty", "terrain",
-                    "skeleton", "checker_url", "facts_added",
-                )
-                if key in summary
-            }
-            await self._emit_coord_bb("gc_bootstrap_complete", **sanitized)
 
         async def _stop_supervisor_tasks() -> None:
             for task in supervisor_tasks:

@@ -445,7 +445,7 @@ def _infer_challenge(body: dict[str, Any]) -> dict[str, Any]:
     if raw_mode:
         ch["mode"] = normalize_challenge_mode(raw_mode)
     if ch.get("mode") == "geocache":
-        ch.update(normalize_geocache_fields(ch))
+        ch.update(normalize_geocache_fields(ch, require_code=True))
     if ch.get("mode") == "geocache" and str(ch.get("geocheck_url") or "").strip():
         ch["verifier_rate_limited"] = True
     prompt = (body.get("prompt") or ch.get("description") or "").strip()
@@ -624,6 +624,10 @@ def _swarm_driver(body: dict[str, Any], mgr: RunManager | None = None) -> Driver
         # or "geocache" (listing fields only at this layer). Body may carry it at
         # top level or under challenge.*; unknown values fall back to ctf.
         mode = normalize_challenge_mode(ch.get("mode") or body.get("mode") or "ctf")
+        if mode == "geocache":
+            from muteki.solver.gc_urls import require_gc_code
+
+            require_gc_code(ch.get("gc_code"))
         prompt_text = (body.get("prompt") or ch.get("description") or "").strip()
         goal_text = (ch.get("goal") or body.get("goal") or "")
         if mode == "pentest" and not str(goal_text).strip():
@@ -1438,6 +1442,10 @@ def build_standby_driver(cmd: dict[str, Any], mgr: "RunManager | None" = None) -
             except Exception:
                 ch = {}
         mode = normalize_challenge_mode(ch.get("mode") or "ctf")
+        if mode == "geocache":
+            from muteki.solver.gc_urls import require_gc_code
+
+            require_gc_code(ch.get("gc_code"))
         engagement = None
         if mode == "pentest":
             raw_eg = ch.get("engagement")

@@ -143,11 +143,19 @@ def validate_digit_checksum(raw: object) -> int | None:
     return value
 
 
-def normalize_geocache_fields(ch: dict) -> dict[str, object]:
-    """Return normalized GC fields or raise GeocacheFieldError."""
+def normalize_geocache_fields(
+    ch: dict, *, require_code: bool = False,
+) -> dict[str, object]:
+    """Return normalized GC fields or raise GeocacheFieldError.
+
+    ``require_code=True`` is the Web infer / geocache start contract: mode
+    geocache must carry a non-empty ``GC[A-Z0-9]+``. Direct Challenge
+    construction and CTF pass-through keep the default so empty fields stay
+    valid there.
+    """
     updates: dict[str, object] = {}
     raw_code = ch.get("gc_code")
-    if raw_code not in (None, ""):
+    if require_code or raw_code not in (None, ""):
         updates["gc_code"] = require_gc_code(raw_code)
     if ch.get("geocheck_url") not in (None, ""):
         updates["geocheck_url"] = validate_checker_url(ch.get("geocheck_url"))

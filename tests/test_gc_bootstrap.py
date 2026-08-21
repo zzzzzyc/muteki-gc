@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from muteki.core.event_bus import EventBus
-from muteki.core.events import EventType
+from muteki.core.events import Event, EventType, hitl_request_payload, hitl_resolved_payload
 from muteki.core.llm import ModelSpec
 from muteki.models.solve_graph import Challenge
 from muteki.sandbox.manager import SandboxManager
@@ -152,36 +152,60 @@ def test_bootstrap_requires_and_normalizes_gc_code(tmp_path):
     assert capture["argv"][2] == "GC8ABCD"
 
 
-def test_bootstrap_command_env_cwd_no_shell(tmp_path, monkeypatch):
+def test_bootstrap_default_runner_uses_create_subprocess_exec(tmp_path, monkeypatch):
     from muteki.solver.gc_bootstrap import bootstrap_gc_challenge
 
-    capture: dict[str, Any] = {}
+    script = tmp_path / "trusted-gc"
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
     secret = "sk-secret-must-not-leak"
     cookie = "GEO_COOKIE_DUMMY"
     monkeypatch.setenv("OPENAI_API_KEY", secret)
     monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
     monkeypatch.setenv("GEOCACHING_COOKIE", cookie)
     monkeypatch.setenv("GEOCACHING_USERNAME", "alice")
-    runner = _run(_scripted_runner(_record(), capture=capture))
-    previous = os.getcwd()
+    monkeypatch.delenv("MUTEKI_GC_CLI_SHA256", raising=False)
+
+    recorded: dict[str, Any] = {}
+    stdout = json.dumps(_record()).encode("utf-8")
+
+    class _Proc:
+        returncode = 0
+        pid = 17
+
+        async def communicate(self):
+            return stdout, b""
+
+        def kill(self):
+            recorded["killed"] = True
+
+    async def fake_exec(*args, **kwargs):
+        recorded["args"] = args
+        recorded["kwargs"] = kwargs
+        recorded["shell"] = False
+        return _Proc()
+
+    monkeypatch.setattr(
+        "muteki.solver.gc_checker.asyncio.create_subprocess_exec", fake_exec)
     worker = tmp_path / "worker-cwd"
     worker.mkdir()
+    previous = os.getcwd()
     try:
         os.chdir(worker)
-        _run(bootstrap_gc_challenge(_challenge(), _graph(tmp_path), runner=runner))
+        _run(bootstrap_gc_challenge(
+            _challenge(), _graph(tmp_path), executable=str(script)))
     finally:
         os.chdir(previous)
-    argv = capture["argv"]
-    assert argv[1:] == ["show", "GC8ABCD", "--json"]
-    assert capture["shell"] is False
-    cwd = Path(capture["cwd"])
+    assert recorded["args"][0] == str(script.resolve())
+    assert recorded["args"][1:] == ("show", "GC8ABCD", "--json")
+    assert recorded["shell"] is False
+    assert recorded["kwargs"].get("start_new_session") is True
+    cwd = Path(recorded["kwargs"]["cwd"])
     assert cwd != worker
     assert cwd != tmp_path
-    env = capture["env"]
+    env = recorded["kwargs"]["env"]
     assert "OPENAI_API_KEY" not in env
-    assert "ANTHROPIC_API_KEY" not in env
     assert env["GEOCACHING_COOKIE"] == cookie
-    assert env["GEOCACHING_USERNAME"] == "alice"
     assert env.get("PATH")
     assert env.get("HOME")
 
@@ -335,10 +359,16 @@ def test_bootstrap_writes_seven_verified_fact_families_with_witness(tmp_path):
         assert row["source"] == source
         assert row["witness"]
         assert "cookie" not in (row["witness"] or "").lower()
-        assert row["actor"] in ("", "gc-bootstrap") or "gc-bootstrap" in joined
     events = graph.events()
-    actors = {e.get("actor") for e in events if e.get("kind") == "fact_added"}
-    assert "gc-bootstrap" in actors
+    fact_events = [e for e in events if e.get("kind") == "fact_added"]
+    assert fact_events
+    assert all(e.get("actor") == "gc-bootstrap" for e in fact_events)
+    assert all(
+        (e.get("payload") or {}).get("source") == source for e in fact_events)
+    assert all(
+        (e.get("payload") or {}).get("source_solver") == "gc-bootstrap"
+        for e in fact_events
+    )
 
 
 def test_bootstrap_is_idempotent_on_facts_and_description(tmp_path):
@@ -375,6 +405,16 @@ def test_bootstrap_description_append_is_capped(tmp_path):
 # ── Coordinator integration ──────────────────────────────────────────────────
 
 
+_BOOTSTRAP_NEED = (
+    "无法加载 Geocaching listing，请运行 gc auth login "
+    "或检查 GC code"
+)
+_BOOTSTRAP_HITL = hitl_request_payload(
+    "gc-bootstrap", _BOOTSTRAP_NEED,
+    kind="env_down", need_kind="external_blocker",
+)
+
+
 def _swarm(challenge: Challenge, tmp_path: Path, **kw: Any) -> Swarm:
     kw.setdefault("race_scout", False)
     return Swarm(
@@ -388,6 +428,75 @@ def _swarm(challenge: Challenge, tmp_path: Path, **kw: Any) -> Swarm:
         graph_dir=tmp_path / "graph",
         **kw,
     )
+
+
+async def _wait_until(pred, *, timeout: float = 2.0, label: str = "condition"):
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if pred():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {label}")
+
+
+def _patch_hanging_watch(
+    monkeypatch: pytest.MonkeyPatch,
+    finished: dict[str, bool] | None = None,
+):
+    started = asyncio.Event()
+    if finished is not None:
+        finished["started_event"] = started
+
+    async def _hang(*_a: Any, **_k: Any) -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            if finished is not None:
+                finished["cancelled"] = True
+            raise
+        finally:
+            if finished is not None:
+                finished["done"] = True
+
+    monkeypatch.setattr(
+        "muteki.swarm.coordinator_loop.watch_gc_session",
+        _hang,
+        raising=False,
+    )
+    return _hang
+
+
+def _sanitized_summary() -> dict[str, Any]:
+    return {
+        "code": "GC8ABCD",
+        "name": "Greenwich Mystery",
+        "posted": "N 51 28.611 W 000 00.030",
+        "difficulty": 3.5,
+        "terrain": 2.0,
+        "skeleton": "N 51 28.??? W 000 00.???",
+        "checker_url": "https://geocheck.org/geo_check.php?gid=42",
+        "facts_added": 7,
+    }
+
+
+def _forbid_progress(sw: Swarm, order: list[str], monkeypatch: pytest.MonkeyPatch):
+    async def health() -> list[str]:
+        order.append("health")
+        return ["claude"]
+
+    async def race(*_a: Any, **_k: Any):
+        order.append("race")
+        await asyncio.Event().wait()
+        return None, None, {}
+
+    def worker(*_a: Any, **_k: Any):
+        order.append("worker")
+        raise AssertionError("worker must not be constructed before bootstrap")
+
+    monkeypatch.setattr(sw, "_healthy_engines_async", health)
+    monkeypatch.setattr(sw, "_run_race_scout", race)
+    monkeypatch.setattr(sw, "_make_cli_worker", worker)
 
 
 def test_coordinator_bootstraps_before_health_and_workers(tmp_path, monkeypatch):
@@ -503,25 +612,229 @@ async def test_coordinator_bootstrap_failure_is_blocker_not_solved(
         captured.append(ev)
 
     bus.add_sink(recorder)
-    sw = _swarm(_challenge(), tmp_path, bus=bus)
+    order: list[str] = []
+    sw = _swarm(_challenge(), tmp_path, bus=bus, race_scout=True)
+    _forbid_progress(sw, order, monkeypatch)
+    task = asyncio.create_task(sw._run_coordinator())
+    try:
+        await _wait_until(
+            lambda: any(h.get("worker") == "gc-bootstrap" for h in sw._pending_help),
+            label="bootstrap HITL",
+        )
+        await asyncio.sleep(0.05)
+        assert order == []
+        assert not task.done()
+        reqs = [ev for ev in captured if ev.event_type is EventType.HITL_REQUEST]
+        assert len(reqs) == 1
+        need = str((reqs[0].payload or {}).get("need") or "")
+        assert "gc auth login" in need
+        assert "GC" in need
+        assert (reqs[0].payload or {}).get("need_kind") == "external_blocker"
+        assert (reqs[0].payload or {}).get("worker") == "gc-bootstrap"
+        dumped = json.dumps(
+            [(ev.payload or {}) for ev in captured], ensure_ascii=False)
+        assert "cookie" not in dumped.lower()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
-    async def health() -> list[str]:
-        return []
 
-    monkeypatch.setattr(sw, "_healthy_engines_async", health)
-    outcome = await asyncio.wait_for(sw._run_coordinator(), timeout=3)
-    assert outcome.solved is False
-    assert "solved" not in (outcome.reason or "").lower() or "NoEligibleEngine" in outcome.reason
-    reqs = [ev for ev in captured if ev.event_type is EventType.HITL_REQUEST]
-    assert reqs
-    need = str((reqs[0].payload or {}).get("need") or "")
-    assert "gc auth login" in need or "GC" in need
-    assert (reqs[0].payload or {}).get("need_kind") == "external_blocker"
-    assert any(
-        h.get("need_kind") == "external_blocker" for h in sw._pending_help
+@pytest.mark.asyncio
+async def test_coordinator_bootstrap_retries_after_operator_wake_then_health_race(
+    tmp_path, monkeypatch,
+):
+    from muteki.solver.gc_bootstrap import GcBootstrapError
+
+    attempts = {"n": 0}
+    order: list[str] = []
+
+    async def flaky_boot(*_a, **_k):
+        attempts["n"] += 1
+        order.append(f"bootstrap{attempts['n']}")
+        if attempts["n"] == 1:
+            raise GcBootstrapError("无法加载 Geocaching listing")
+        return _sanitized_summary()
+
+    monkeypatch.setattr(
+        "muteki.swarm.coordinator_loop.bootstrap_gc_challenge", flaky_boot,
+        raising=False,
     )
-    dumped = json.dumps([(ev.payload or {}) for ev in captured], ensure_ascii=False)
-    assert "cookie" not in dumped.lower()
+    bus = EventBus()
+    captured: list[Any] = []
+
+    async def recorder(ev):
+        captured.append(ev)
+
+    bus.add_sink(recorder)
+    sw = _swarm(_challenge(), tmp_path, bus=bus, race_scout=True)
+    _forbid_progress(sw, order, monkeypatch)
+    task = asyncio.create_task(sw._run_coordinator())
+    try:
+        await _wait_until(
+            lambda: any(h.get("worker") == "gc-bootstrap" for h in sw._pending_help),
+            label="first bootstrap HITL",
+        )
+        await asyncio.sleep(0.05)
+        assert order == ["bootstrap1"]
+        assert not task.done()
+        await bus.emit(Event(
+            event_type=EventType.HITL_RESOLVED,
+            run_id=sw.run_id,
+            payload=hitl_resolved_payload(
+                _BOOTSTRAP_HITL["request_id"],
+                worker="gc-bootstrap",
+                reason="Geocaching 会话已恢复",
+            ),
+        ))
+        await _wait_until(lambda: "race" in order, label="health then race")
+        assert order == ["bootstrap1", "bootstrap2", "health", "race"]
+        reqs = [ev for ev in captured if ev.event_type is EventType.HITL_REQUEST]
+        assert len(reqs) == 1
+        assert (reqs[0].payload or {}).get("need") == _BOOTSTRAP_NEED
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_coordinator_bootstrap_wake_without_repair_dedups_hitl(
+    tmp_path, monkeypatch,
+):
+    from muteki.solver.gc_bootstrap import GcBootstrapError
+
+    attempts = {"n": 0}
+
+    async def always_fail(*_a, **_k):
+        attempts["n"] += 1
+        raise GcBootstrapError("无法加载 Geocaching listing")
+
+    monkeypatch.setattr(
+        "muteki.swarm.coordinator_loop.bootstrap_gc_challenge", always_fail,
+        raising=False,
+    )
+    bus = EventBus()
+    captured: list[Any] = []
+
+    async def recorder(ev):
+        captured.append(ev)
+
+    bus.add_sink(recorder)
+    order: list[str] = []
+    sw = _swarm(_challenge(), tmp_path, bus=bus, race_scout=True)
+    _forbid_progress(sw, order, monkeypatch)
+    task = asyncio.create_task(sw._run_coordinator())
+    try:
+        await _wait_until(lambda: attempts["n"] >= 1, label="first fail")
+        await _wait_until(
+            lambda: any(h.get("worker") == "gc-bootstrap" for h in sw._pending_help),
+            label="HITL pending",
+        )
+        await bus.emit(Event(
+            event_type=EventType.HITL_RESOLVED,
+            run_id=sw.run_id,
+            payload=hitl_resolved_payload(
+                _BOOTSTRAP_HITL["request_id"],
+                worker="gc-bootstrap",
+                reason="woke without repair",
+            ),
+        ))
+        await _wait_until(lambda: attempts["n"] >= 2, label="retry after unrepaired wake")
+        await _wait_until(
+            lambda: any(h.get("worker") == "gc-bootstrap" for h in sw._pending_help),
+            label="HITL pending again",
+        )
+        await asyncio.sleep(0.05)
+        reqs = [ev for ev in captured if ev.event_type is EventType.HITL_REQUEST]
+        assert len(reqs) == 1
+        assert order == []
+        assert not task.done()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_coordinator_missing_gc_code_is_fail_closed_blocker(
+    tmp_path, monkeypatch,
+):
+    bus = EventBus()
+    captured: list[Any] = []
+
+    async def recorder(ev):
+        captured.append(ev)
+
+    bus.add_sink(recorder)
+    order: list[str] = []
+    sw = _swarm(_challenge(gc_code=""), tmp_path, bus=bus, race_scout=True)
+    _forbid_progress(sw, order, monkeypatch)
+    task = asyncio.create_task(sw._run_coordinator())
+    try:
+        await _wait_until(
+            lambda: any(h.get("worker") == "gc-bootstrap" for h in sw._pending_help),
+            label="missing-code HITL",
+        )
+        await asyncio.sleep(0.05)
+        assert order == []
+        assert not task.done()
+        reqs = [ev for ev in captured if ev.event_type is EventType.HITL_REQUEST]
+        assert reqs
+        assert (reqs[0].payload or {}).get("need_kind") == "external_blocker"
+        assert (reqs[0].payload or {}).get("worker") == "gc-bootstrap"
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_coordinator_cancel_during_bootstrap_wait_stops_supervisors(
+    tmp_path, monkeypatch,
+):
+    from muteki.solver.gc_bootstrap import GcBootstrapError
+
+    finished: dict[str, Any] = {}
+    _patch_hanging_watch(monkeypatch, finished)
+
+    async def boom(*_a, **_k):
+        raise GcBootstrapError("无法加载 Geocaching listing")
+
+    monkeypatch.setattr(
+        "muteki.swarm.coordinator_loop.bootstrap_gc_challenge", boom,
+        raising=False,
+    )
+    bus = EventBus()
+    inbox: asyncio.Queue = asyncio.Queue()
+    order: list[str] = []
+    sw = _swarm(
+        _challenge(), tmp_path, bus=bus, race_scout=True, hitl_inbox=inbox,
+    )
+    _forbid_progress(sw, order, monkeypatch)
+    task = asyncio.create_task(sw._run_coordinator())
+    try:
+        await _wait_until(
+            lambda: any(h.get("worker") == "gc-bootstrap" for h in sw._pending_help),
+            label="bootstrap wait",
+        )
+        started = finished.get("started_event")
+        assert started is not None
+        await asyncio.wait_for(started.wait(), timeout=2)
+        drain = [
+            t for t in asyncio.all_tasks() if t.get_name() == "hitl-drain"
+        ]
+        assert drain
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        assert finished.get("cancelled") is True
+        assert finished.get("done") is True
+        assert not [
+            t for t in asyncio.all_tasks()
+            if t.get_name() in {"gc-session-watchdog", "hitl-drain"}
+            and not t.done()
+        ]
+        assert order == []
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

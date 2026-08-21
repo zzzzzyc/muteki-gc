@@ -77,10 +77,12 @@ def test_ctf_and_pentest_dispatch_bodies_unchanged():
     assert "challenge.goal" in pentest_block
     assert "challenge.scope" in pentest_block
     assert "gc_code" not in pentest_block
-    ctf_block = page.split("} else {")[1].split("}")[0] if False else page
-    # CTF still owns collect / flag format
-    assert "challenge.multi_flag = true" in page
-    assert "challenge.flag_format = \"token\"" in page
+    after_gc = page.split('} else if (opts?.mode === "geocache")')[1]
+    ctf_block = after_gc.split("} else {")[1].split("const worker_backend")[0]
+    assert "challenge.multi_flag = true" in ctf_block
+    assert "challenge.flag_format" in ctf_block
+    assert "gc_code" not in ctf_block
+    assert "swarm_class" not in ctf_block
     assert 'opts?.mode === "pentest"' in page
 
 
@@ -136,6 +138,9 @@ def test_infer_normalizes_gc_code_and_rejects_invalid_geocache_fields():
     assert ch["anchor_radius_m"] == 1500
 
     invalid_bodies = [
+        {"mode": "geocache"},
+        {"mode": "geocache", "gc_code": ""},
+        {"mode": "geocache", "gc_code": "   "},
         {"mode": "geocache", "gc_code": "not-a-code"},
         {"mode": "geocache", "gc_code": "GC8ABCD",
          "geocheck_url": "https://geocheck.org.evil.com/x"},
@@ -203,3 +208,42 @@ def test_driver_construction_rejects_invalid_geocache_radius():
             "gc_code": "GC8ABCD",
             "anchor_radius_m": -5,
         })
+
+
+def test_infer_geocache_requires_nonempty_valid_gc_code():
+    from apps.web.drivers import _infer_challenge
+    from muteki.solver.gc_urls import GeocacheFieldError
+
+    for challenge in (
+        {"mode": "geocache"},
+        {"mode": "geocache", "gc_code": ""},
+        {"mode": "geocache", "gc_code": "   "},
+        {"mode": "geocache", "gc_code": "XXX"},
+    ):
+        with pytest.raises((GeocacheFieldError, ValueError)):
+            _infer_challenge({"prompt": "x", "challenge": challenge})
+
+
+def test_start_rejects_missing_and_invalid_gc_code_before_run_creation(
+    tmp_path, monkeypatch,
+):
+    from fastapi.testclient import TestClient
+
+    from apps.web.run_manager import RunManager
+    from apps.web.server import create_app
+
+    monkeypatch.delenv("MUTEKI_WEB_PASSWORD", raising=False)
+    mgr = RunManager(sessions_root=tmp_path / "sessions")
+    client = TestClient(create_app(mgr))
+    cases = [
+        ("gc-start-missing", {"mode": "geocache"}),
+        ("gc-start-empty", {"mode": "geocache", "gc_code": ""}),
+        ("gc-start-invalid", {"mode": "geocache", "gc_code": "XXX"}),
+    ]
+    for run_id, challenge in cases:
+        resp = client.post(
+            f"/api/runs/{run_id}/start",
+            json={"kind": "swarm", "prompt": "x", "challenge": challenge},
+        )
+        assert resp.status_code == 400, (run_id, resp.status_code, resp.text)
+        assert mgr.get(run_id) is None
