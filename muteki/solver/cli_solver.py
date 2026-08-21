@@ -4616,9 +4616,11 @@ class CliSolver:
         radius = getattr(c, "anchor_radius_m", 3200.0)
         if radius is None:
             radius = 3200.0
+        km = float(radius) / 1000.0
+        km_text = f"{km:.10g}"
         lines.append(
-            f"Anchor radius: {radius:g} m (D3–D4 mystery finals stay within "
-            f"3.2 km of posted unless listing says otherwise)"
+            f"Anchor radius: {radius:g} m / {km_text} km. "
+            f"D3–D4 mystery finals stay within this posted-coordinate radius."
         )
         return "\n".join(lines)
 
@@ -4780,6 +4782,8 @@ class CliSolver:
         worker), and how many remain. Injected into EVERY prompt builder (bootstrap/
         exec, explore, resume) so an explore worker also knows N/total and doesn't
         stop after one. Empty for a single-flag challenge (byte-identical prompt)."""
+        if getattr(self.challenge, "mode", "ctf") == "geocache":
+            return ""
         n = self._expected_flags()
         if getattr(self.challenge, "mode", "ctf") == "pentest":
             eg = engagement_goal_of(self.challenge)
@@ -4842,6 +4846,8 @@ class CliSolver:
         stops the re-derivation at the source. Rendered for single- AND multi-flag
         runs (a false positive happens in both); empty when nothing was rejected, so
         the prompt is byte-identical on the common path."""
+        if getattr(self.challenge, "mode", "ctf") == "geocache":
+            return ""
         bad = sorted(self._rejected_flags())
         if not bad:
             return ""

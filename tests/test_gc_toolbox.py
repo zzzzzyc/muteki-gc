@@ -145,6 +145,42 @@ def test_gc_wrapper_is_not_a_protocol_fork():
     assert "os.exec" in text or "os.execl" in text or "subprocess" in text
 
 
+def test_coord_calc_missing_both_sources_exits_2_chinese(tmp_path):
+    skill = tmp_path / "gc-blackboard"
+    skill.mkdir()
+    shutil.copy2(_CALC, skill / "coord_calc.py")
+    blocker = tmp_path / "blocker"
+    (blocker / "muteki").mkdir(parents=True)
+    (blocker / "muteki" / "__init__.py").write_text("", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(skill / "coord_calc.py"), "checksum", "12ab34"],
+        capture_output=True, text=True, timeout=15,
+        env={**os.environ, "PYTHONPATH": str(blocker)},
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "Traceback" not in result.stderr
+    err_lines = [line for line in result.stderr.splitlines() if line.strip()]
+    assert len(err_lines) == 1
+    assert any("\u4e00" <= ch <= "\u9fff" for ch in err_lines[0])
+
+
+def test_gc_wrapper_skips_self_and_exits_2_without_protocol(tmp_path):
+    isolated = tmp_path / "muteki-blackboard" / "blackboard.py"
+    isolated.parent.mkdir()
+    isolated.write_text(_WRAPPER.read_text(encoding="utf-8"), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(isolated), "read-facts"],
+        capture_output=True, text=True, timeout=10,
+        env={**os.environ},
+    )
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+    err_lines = [line for line in result.stderr.splitlines() if line.strip()]
+    assert len(err_lines) == 1
+    assert any("\u4e00" <= ch <= "\u9fff" for ch in err_lines[0])
+
+
 def test_gc_wrapper_delegates_to_sibling_blackboard(tmp_path):
     ch = Challenge(id="c1", name="t", category="misc")
     graph = SQLiteSharedGraph.open(db_path=tmp_path / "shared_graph.db", challenge=ch)

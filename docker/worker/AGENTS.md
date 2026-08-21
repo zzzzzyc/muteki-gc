@@ -75,6 +75,11 @@ blackboard.py release-resource "<resource-key>"
 - 修改脚本后先运行与当前操作路径直接相关的命令，确认功能可以执行。
 - 功能路径完成后等待后续指令，再补充额外防护、回归测试或兼容性处理。
 
+# 适用范围（Flag 结果）
+
+下面「Flag 结果」一节仅适用于 CTF 以及带 Flag 的 pentest。当 challenge mode 为
+geocache 时，忽略该节，改走下面的「Geocache」一节，只用 `submit-coord`。
+
 # Flag 结果
 
 Flag 必须来自目标的真实执行输出或真实产物。占位符、模板内容、示例值以及模型自行生成的

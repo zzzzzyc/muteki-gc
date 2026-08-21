@@ -31,16 +31,23 @@ def _load_coord():
     for root in (here / "vendor", Path("/opt/muteki/gc-blackboard/vendor")):
         if (root / "geocaching_cli" / "coord.py").is_file():
             sys.path.insert(0, str(root))
-            break
-    from geocaching_cli.coord import (  # type: ignore
-        CoordError,
-        digit_checksum,
-        format_coord,
-        midpoint,
-        parse_coord,
-        project,
+            try:
+                from geocaching_cli.coord import (  # type: ignore
+                    CoordError,
+                    digit_checksum,
+                    format_coord,
+                    midpoint,
+                    parse_coord,
+                    project,
+                )
+                return parse_coord, project, midpoint, digit_checksum, format_coord, CoordError
+            except ImportError:
+                break
+    print(
+        "无法加载坐标核心：缺少 muteki.vendor.geocaching_cli 与本地 vendor/geocaching_cli",
+        file=sys.stderr,
     )
-    return parse_coord, project, midpoint, digit_checksum, format_coord, CoordError
+    raise SystemExit(2)
 
 
 class _Parser(argparse.ArgumentParser):

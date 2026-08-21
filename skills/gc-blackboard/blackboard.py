@@ -11,6 +11,21 @@ import sys
 from pathlib import Path
 
 
+def _is_self(path: Path) -> bool:
+    try:
+        return path.resolve() == Path(__file__).resolve()
+    except OSError:
+        return False
+
+
+def _is_launcher(path: Path) -> bool:
+    try:
+        head = path.read_text(encoding="utf-8", errors="replace")[:4000]
+    except OSError:
+        return False
+    return "Thin launcher for the sibling staged" in head
+
+
 def _protocol_script() -> Path:
     here = Path(os.path.dirname(os.path.abspath(__file__)))
     candidates = (
@@ -20,8 +35,11 @@ def _protocol_script() -> Path:
         Path("/usr/local/bin/blackboard.py"),
     )
     for cand in candidates:
-        if cand.is_file():
-            return cand
+        if not cand.is_file():
+            continue
+        if _is_self(cand) or _is_launcher(cand):
+            continue
+        return cand
     print("ERROR: 找不到 sibling muteki-blackboard/blackboard.py", file=sys.stderr)
     sys.exit(2)
 

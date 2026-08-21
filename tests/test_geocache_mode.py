@@ -329,3 +329,54 @@ def test_resume_prompt_geocache_mode_isolation():
     assert "submit-flag" in ctf
     assert pentest == _cli_solver._PENTEST_RESUME_PROMPT
     assert "SUBMIT_REPORT=" in pentest
+
+
+def test_explore_conclude_text_three_modes():
+    gc = _solver(_gc_challenge())._explore_conclude_text()
+    ctf = _solver(Challenge(id="t", name="t", category="web"))._explore_conclude_text()
+    pentest = _solver(Challenge(
+        id="t", name="acme", category="web", mode="pentest", goal="find RCE",
+    ))._explore_conclude_text()
+
+    assert gc == _cli_solver._GC_EXPLORE_CONCLUDE_PROMPT
+    assert "submit-coord" in gc
+    for needle in _GC_FORBIDDEN:
+        assert needle not in gc
+    assert ctf == _cli_solver._EXPLORE_CONCLUDE_PROMPT
+    assert "submit-flag" in ctf
+    assert pentest == _cli_solver._PENTEST_EXPLORE_CONCLUDE_PROMPT
+    assert "SUBMIT_REPORT=" in pentest
+
+
+def test_geocache_omits_flag_team_and_rejected_blocks_even_if_multiflag():
+    class _Graph:
+        def invalidated_flags(self):
+            return {"flag{false_positive}"}
+
+        def snapshot(self):
+            return type("S", (), {"flags": ["flag{one}"]})()
+
+    ch = _gc_challenge(expected_flags=3)
+    s = _solver(ch, shared_graph=_Graph())
+    assert s._team_context_block() == ""
+    assert s._rejected_flags_block() == ""
+    bootstrap = s._build_prompt()
+    explore = s._build_explore_prompt()
+    for prompt in (bootstrap, explore):
+        assert "submit-flag" not in prompt
+        assert "This challenge has 3 flags" not in prompt
+        assert "Known-BAD flags" not in prompt
+        assert "submit-coord" in prompt
+
+
+def test_geocache_listing_uses_effective_anchor_radius():
+    custom = _solver(_gc_challenge(anchor_radius_m=1500.0))._geocache_listing_block()
+    assert "1500" in custom
+    assert "1.5 km" in custom
+    assert "3.2" not in custom
+    assert "3200" not in custom
+
+    default = _solver(_gc_challenge(anchor_radius_m=3200.0))._geocache_listing_block()
+    assert "3200" in default
+    assert "3.2 km" in default
+    assert "1.5 km" not in default

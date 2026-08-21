@@ -135,6 +135,34 @@ def test_worker_images_ship_gc_blackboard_and_coord_vendor():
     assert "docker/worker/AGENTS.md" in slim_build
 
 
+def test_worker_agents_scopes_flag_section_away_from_geocache():
+    """AGENTS.md is auto-read by every worker. Flag 结果 is CTF/pentest only."""
+    repo = os.path.dirname(os.path.dirname(__file__))
+    agents = open(
+        os.path.join(repo, "docker", "worker", "AGENTS.md"), encoding="utf-8",
+    ).read()
+    flag_idx = agents.find("# Flag 结果")
+    geo_idx = agents.find("# Geocache")
+    assert flag_idx != -1 and geo_idx != -1
+    notice = agents[:flag_idx]
+    assert "仅适用于 CTF" in notice or "只适用于 CTF" in notice
+    assert "geocache" in notice.lower()
+    assert "submit-coord" in notice
+    assert "忽略" in notice or "不要遵循" in notice
+    # notice sits immediately before the Flag heading
+    between = agents[flag_idx - 80:flag_idx]
+    assert "geocache" in between.lower() or "submit-coord" in between
+    # Flag section body is unchanged
+    flag_body = agents[flag_idx:geo_idx]
+    assert "blackboard.py submit-flag '<flag>'" in flag_body
+    assert "FOUND_FLAG=" in flag_body
+    slim_build = open(os.path.join(repo, "docker/worker-slim/build.sh"), encoding="utf-8").read()
+    assert "docker/worker/AGENTS.md" in slim_build
+    assert "worker-slim/AGENTS.md" not in slim_build.replace(
+        "docker/worker/AGENTS.md", "")
+
+
+
 
 def test_worker_images_wrap_package_managers_with_auto_sudo():
     """Slim workers are intentionally light, but agents must be able to install
