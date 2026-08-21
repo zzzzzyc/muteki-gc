@@ -25,6 +25,7 @@ _CALC = _GC_SKILL / "coord_calc.py"
 _WRAPPER = _GC_SKILL / "blackboard.py"
 _ORIGIN = "N 40 41.352 W 074 02.670"
 _OTHER = "N 40 42.000 W 074 03.000"
+_SYSTEM_PY = Path("/usr/bin/python3")
 
 
 def _run_calc(*args: str, extra_env: dict[str, str] | None = None):
@@ -32,6 +33,23 @@ def _run_calc(*args: str, extra_env: dict[str, str] | None = None):
     return subprocess.run(
         [sys.executable, str(_CALC), *args],
         capture_output=True, text=True, env=env, timeout=15,
+    )
+
+
+def _system_python_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Worker-like env: system interpreter, no venv / installed muteki path."""
+    env = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PYTHONHOME"}}
+    env["PYTHONNOUSERSITE"] = "1"
+    if extra:
+        env.update(extra)
+    return env
+
+
+def _run_system_calc(script: Path, *args: str, cwd: Path | None = None):
+    return subprocess.run(
+        [str(_SYSTEM_PY), str(script), *args],
+        capture_output=True, text=True, env=_system_python_env(),
+        timeout=15, cwd=str(cwd) if cwd is not None else None,
     )
 
 
@@ -118,6 +136,24 @@ def test_coord_calc_invalid_input_exits_2_with_one_chinese_stderr_line():
     assert any("\u4e00" <= ch <= "\u9fff" for ch in err_lines[0])
 
 
+@pytest.mark.skipif(not _SYSTEM_PY.is_file(), reason="/usr/bin/python3 required")
+def test_coord_calc_source_checkout_works_with_system_python():
+    """Local workers invoke /usr/bin/python3; sys.path[0] is the skill dir."""
+    result = _run_system_calc(_CALC, "checksum", "12ab34", cwd=Path("/tmp"))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == gc_coord.digit_checksum("12ab34")
+
+
+@pytest.mark.skipif(not _SYSTEM_PY.is_file(), reason="/usr/bin/python3 required")
+def test_coord_calc_symlink_staged_skill_resolves_repo_root(tmp_path):
+    staged = tmp_path / ".opencode" / "skills" / "gc-blackboard"
+    staged.parent.mkdir(parents=True)
+    staged.symlink_to(_GC_SKILL, target_is_directory=True)
+    result = _run_system_calc(staged / "coord_calc.py", "checksum", "12ab34", cwd=tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == gc_coord.digit_checksum("12ab34")
+
+
 def test_coord_calc_vendor_fallback_without_muteki_package(tmp_path):
     """Container layout: vendor lives under the skill; muteki is not importable."""
     assert _CALC.is_file()
@@ -139,6 +175,15 @@ def test_coord_calc_vendor_fallback_without_muteki_package(tmp_path):
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload == gc_coord.digit_checksum("12ab34")
+
+    if _SYSTEM_PY.is_file():
+        system = subprocess.run(
+            [str(_SYSTEM_PY), str(skill / "coord_calc.py"), "checksum", "12ab34"],
+            capture_output=True, text=True, timeout=15,
+            env=_system_python_env({"PYTHONPATH": str(blocker)}),
+        )
+        assert system.returncode == 0, system.stderr
+        assert json.loads(system.stdout) == gc_coord.digit_checksum("12ab34")
 
 
 def test_gc_wrapper_is_not_a_protocol_fork():

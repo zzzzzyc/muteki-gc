@@ -2,8 +2,10 @@
 """Deterministic coordinate calculator for geocache workers.
 
 Thin argparse front-end over the vendored geocaching-cli coordinate core.
-Prefers ``muteki.vendor.geocaching_cli``; container images may ship the same
-package under ``<skill>/vendor/geocaching_cli``.
+Prefers ``muteki.vendor.geocaching_cli``. Source checkouts and symlink-staged
+skills resolve ``<repo>/muteki/vendor/geocaching_cli`` from this script path.
+Container images and physically copied skills may ship the same package under
+``<skill>/vendor/geocaching_cli``.
 """
 from __future__ import annotations
 
@@ -11,6 +13,16 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+
+def _vendor_roots(here: Path) -> list[Path]:
+    roots = [here / "vendor", Path("/opt/muteki/gc-blackboard/vendor")]
+    for parent in here.parents:
+        candidate = parent / "muteki" / "vendor"
+        if (candidate / "geocaching_cli" / "coord.py").is_file():
+            roots.append(candidate)
+            break
+    return roots
 
 
 def _load_coord():
@@ -28,7 +40,7 @@ def _load_coord():
         pass
 
     here = Path(__file__).resolve().parent
-    for root in (here / "vendor", Path("/opt/muteki/gc-blackboard/vendor")):
+    for root in _vendor_roots(here):
         if (root / "geocaching_cli" / "coord.py").is_file():
             sys.path.insert(0, str(root))
             try:

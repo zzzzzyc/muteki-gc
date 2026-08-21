@@ -20,6 +20,9 @@ _REPO_SKILL = (
 _REPO_GC_SKILL = (
     Path(__file__).resolve().parents[2] / "skills" / "gc-blackboard"
 )
+_REPO_GC_VENDOR = (
+    Path(__file__).resolve().parents[2] / "muteki" / "vendor" / "geocaching_cli"
+)
 
 # `.agents/skills` is the common Agent Skills location used by Codex, Pi and
 # recent compatible CLIs.  Engine-specific locations keep discovery deterministic
@@ -74,7 +77,24 @@ def _stage_named_skill(
         if container:
             raise
         shutil.copytree(target, dest)
+        if name == "gc-blackboard":
+            _stage_gc_vendor(dest)
     return str(dest)
+
+
+def _stage_gc_vendor(dest: Path) -> None:
+    """Copy or link the canonical vendor into a physically copied GC skill."""
+
+    if not _REPO_GC_VENDOR.is_dir():
+        return
+    target = dest / "vendor" / "geocaching_cli"
+    if target.exists():
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.symlink_to(_REPO_GC_VENDOR, target_is_directory=True)
+    except OSError:
+        shutil.copytree(_REPO_GC_VENDOR, target)
 
 
 def stage_blackboard_skill(

@@ -403,6 +403,31 @@ def test_stage_geocache_preserves_operator_provided_skill_dirs(tmp_path):
     assert {Path(path).name for path in staged} == {"muteki-blackboard", "gc-blackboard"}
 
 
+def test_stage_geocache_physical_copy_includes_canonical_vendor(tmp_path, monkeypatch):
+    """No-symlink filesystems copy the skill; stage canonical vendor into that copy."""
+    from muteki.solver.worker_skills import project_skill_roots, stage_blackboard_skill
+
+    def _no_symlink(self, target, target_is_directory=False):
+        raise OSError("symlink unsupported")
+
+    monkeypatch.setattr(Path, "symlink_to", _no_symlink)
+    worker = tmp_path / "worker"
+    staged = stage_blackboard_skill(worker, engine="claude", mode="geocache")
+    gc_paths = [Path(path) for path in staged if Path(path).name == "gc-blackboard"]
+    assert gc_paths
+    canonical = (
+        Path(__file__).resolve().parents[1] / "muteki" / "vendor" / "geocaching_cli" / "coord.py"
+    )
+    for dest in gc_paths:
+        assert not dest.is_symlink()
+        assert (dest / "coord_calc.py").is_file()
+        staged_coord = dest / "vendor" / "geocaching_cli" / "coord.py"
+        assert staged_coord.is_file()
+        assert staged_coord.read_text(encoding="utf-8") == canonical.read_text(encoding="utf-8")
+        assert not (Path(__file__).resolve().parents[1] / "skills" / "gc-blackboard" / "vendor").exists()
+    assert len(gc_paths) == len(project_skill_roots("claude"))
+
+
 def test_stage_container_maps_immutable_gc_and_base_roots(tmp_path):
     from muteki.solver.worker_skills import project_skill_roots, stage_blackboard_skill
 
