@@ -1329,9 +1329,9 @@ def create_app(manager: Optional[RunManager] = None) -> FastAPI:
         body = await _require_dict_body(request)
         prompt = str(body.get("prompt") or "")[:4000]
         goal = str(body.get("goal") or "")
-        mode = str(body.get("mode") or "ctf")
-        if mode not in ("ctf", "pentest"):
-            mode = "ctf"
+        from muteki.models.solve_graph import normalize_challenge_mode
+
+        mode = normalize_challenge_mode(body.get("mode") or "ctf")
         mgr = app.state.manager
         try:
             llm_profiles = dict(mgr.worker_config.get().get("llm_profiles") or {})

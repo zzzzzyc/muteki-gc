@@ -704,7 +704,7 @@ export interface DeckState {
   // flag_found events may be replayed; keep them out of the current solved state.
   invalidatedFlags: string[];
   expectedFlags: number;
-  mode?: "ctf" | "pentest";
+  mode?: "ctf" | "pentest" | "geocache";
   expectedFindings: number;
   // multi-flag MODE bit. When true with an unknown count (expectedFlags<=1), a
   // saved flag does NOT mark the run solved — it keeps "collecting" until the run
@@ -1169,7 +1169,7 @@ export function reduce(prev: DeckState, ev: MutekiEvent): DeckState {
       s.target = p.challenge?.target ?? s.target;
       if (typeof p.challenge?.expected_flags === "number") s.expectedFlags = p.challenge.expected_flags;
       if (typeof p.challenge?.multi_flag === "boolean") s.multiFlag = p.challenge.multi_flag;
-      if (p.challenge?.mode === "pentest" || p.challenge?.mode === "ctf") s.mode = p.challenge.mode;
+      if (p.challenge?.mode === "pentest" || p.challenge?.mode === "ctf" || p.challenge?.mode === "geocache") s.mode = p.challenge.mode;
       if (typeof p.challenge?.expected_findings === "number") s.expectedFindings = p.challenge.expected_findings;
       if (typeof p.challenge?.engagement?.expected_findings === "number") {
         s.expectedFindings = p.challenge.engagement.expected_findings;
@@ -1202,7 +1202,7 @@ export function reduce(prev: DeckState, ev: MutekiEvent): DeckState {
       // from the start of the run, not just at RUN_FINISHED.
       if (typeof p.challenge?.expected_flags === "number") s.expectedFlags = p.challenge.expected_flags;
       if (typeof p.challenge?.multi_flag === "boolean") s.multiFlag = p.challenge.multi_flag;
-      if (p.challenge?.mode === "pentest" || p.challenge?.mode === "ctf") s.mode = p.challenge.mode;
+      if (p.challenge?.mode === "pentest" || p.challenge?.mode === "ctf" || p.challenge?.mode === "geocache") s.mode = p.challenge.mode;
       if (typeof p.challenge?.expected_findings === "number") s.expectedFindings = p.challenge.expected_findings;
       if (typeof p.challenge?.engagement?.expected_findings === "number") {
         s.expectedFindings = p.challenge.engagement.expected_findings;
@@ -2947,7 +2947,7 @@ export interface SwarmDigest {
   flag?: string;
   flags: string[];
   expectedFlags: number;
-  mode?: "ctf" | "pentest";
+  mode?: "ctf" | "pentest" | "geocache";
   reports: BlackboardVulnReport[];
   expectedReports: number;
   /** Pentest report pipeline: submitted → reproducing → accepted. */

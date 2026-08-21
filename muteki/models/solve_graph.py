@@ -52,6 +52,16 @@ class Hypothesis(BaseModel):
 
 
 QuantityKind = Literal["first", "collect", "recon"]
+ChallengeMode = Literal["ctf", "pentest", "geocache"]
+CHALLENGE_MODES: tuple[ChallengeMode, ...] = ("ctf", "pentest", "geocache")
+
+
+def normalize_challenge_mode(mode: object) -> ChallengeMode:
+    """Allow-list Challenge.mode. Unknown or empty values fall back to ctf."""
+    raw = str(mode or "ctf")
+    if raw in CHALLENGE_MODES:
+        return raw  # type: ignore[return-value]
+    return "ctf"
 
 
 class EngagementGoal(BaseModel):
@@ -211,7 +221,9 @@ class Challenge(BaseModel):
     # reports after independent reproduction and value judgment);
     # Reason verdict=complete is a planning signal only. mode="ctf" leaves every CTF
     # code path byte-identical (the pentest branches only fire when mode=="pentest").
-    mode: Literal["ctf", "pentest"] = "ctf"
+    # "geocache": transport-only for now (GC fields ride on Challenge). Gate,
+    # prompt, and completion stay on later tasks; unknown modes normalize to ctf.
+    mode: ChallengeMode = "ctf"
     goal: str = ""    # pentest: the engagement objective (drives Reason planning)
     scope: str = ""   # pentest: in-scope targets / authorization boundary
     engagement: Optional[EngagementGoal] = None
@@ -220,6 +232,14 @@ class Challenge(BaseModel):
     # When True, Reason complete may end the run only after a provenance-admitted
     # flag is in the store (salvage from verified evidence is attempted first).
     pentest_flag_required: bool = False
+    # ── geocache listing (transport contract; unused by CTF/pentest paths) ───
+    gc_code: str = ""
+    posted_lat: float | None = None
+    posted_lon: float | None = None
+    coord_skeleton: str = ""
+    digit_checksum: int | None = None
+    geocheck_url: str = ""
+    anchor_radius_m: float = 3200.0
 
 
 class SolveGraph(BaseModel):

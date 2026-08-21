@@ -35,7 +35,7 @@ import type { ArtifactView } from "@/lib/events";
 
 export interface DispatchOpts {
   webSearch: boolean;
-  mode: "ctf" | "pentest";
+  mode: "ctf" | "pentest" | "geocache";
   goal?: string;
   scope?: string;
   // collect mode only controls multi-flag collection. Flag format is independent:

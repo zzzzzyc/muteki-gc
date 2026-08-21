@@ -401,11 +401,30 @@ def _flag_format_fields(ch: dict[str, Any], body: dict[str, Any]) -> tuple[str, 
     return str(raw_format), hint, ""
 
 
+def _geocache_challenge_kwargs(ch: dict[str, Any]) -> dict[str, Any]:
+    """Pass-through GC listing fields from an existing challenge dict."""
+    radius = ch.get("anchor_radius_m")
+    return {
+        "gc_code": ch.get("gc_code") or "",
+        "posted_lat": ch.get("posted_lat"),
+        "posted_lon": ch.get("posted_lon"),
+        "coord_skeleton": ch.get("coord_skeleton") or "",
+        "digit_checksum": ch.get("digit_checksum"),
+        "geocheck_url": ch.get("geocheck_url") or "",
+        "anchor_radius_m": 3200.0 if radius is None else radius,
+    }
+
+
 def _infer_challenge(body: dict[str, Any]) -> dict[str, Any]:
     """Fill a `challenge` block from a conversational `prompt` when the caller
     didn't pass structured fields. Caller-provided fields always win."""
+    from muteki.models.solve_graph import normalize_challenge_mode
+
     body = dict(body or {})
     ch = dict(body.get("challenge") or {})
+    raw_mode = body.get("mode") or ch.get("mode")
+    if raw_mode:
+        ch["mode"] = normalize_challenge_mode(raw_mode)
     prompt = (body.get("prompt") or ch.get("description") or "").strip()
     if not prompt:
         body["challenge"] = ch
@@ -427,8 +446,6 @@ def _infer_challenge(body: dict[str, Any]) -> dict[str, Any]:
         if target:
             ch["target"] = target
             inferred.append("target")
-    if (body.get("mode") or ch.get("mode")) == "pentest":
-        ch["mode"] = "pentest"
     if not ch.get("name"):
         # first few words, slugified — a readable thread-rail label
         words = re.findall(r"[A-Za-z0-9]+", prompt)[:4]
@@ -563,7 +580,8 @@ def _swarm_driver(body: dict[str, Any], mgr: RunManager | None = None) -> Driver
         from pathlib import Path
 
         from muteki.models.solve_graph import (
-            Challenge, apply_expected_findings, parse_engagement_goal,
+            Challenge, apply_expected_findings, normalize_challenge_mode,
+            parse_engagement_goal,
         )
         from muteki.sandbox.manager import SandboxManager
         from muteki.solver.result import ArtifactStore
@@ -579,12 +597,10 @@ def _swarm_driver(body: dict[str, Any], mgr: RunManager | None = None) -> Driver
         # /misc). The worker stages them into its cwd. Keep only paths that exist so
         # a stray entry can't crash the run.
         attachments = [a for a in (ch.get("attachments") or []) if Path(a).exists()]
-        # engagement mode: "ctf" (default, flag-driven) or "pentest" (goal-driven —
-        # find + prove vulnerabilities in scope). Body may carry it at top level or
-        # under challenge.* ; default keeps every CTF dispatch byte-identical.
-        mode = (ch.get("mode") or body.get("mode") or "ctf")
-        if mode not in ("ctf", "pentest"):
-            mode = "ctf"
+        # engagement mode: "ctf" (default, flag-driven), "pentest" (goal-driven),
+        # or "geocache" (listing fields only at this layer). Body may carry it at
+        # top level or under challenge.*; unknown values fall back to ctf.
+        mode = normalize_challenge_mode(ch.get("mode") or body.get("mode") or "ctf")
         prompt_text = (body.get("prompt") or ch.get("description") or "").strip()
         goal_text = (ch.get("goal") or body.get("goal") or "")
         if mode == "pentest" and not str(goal_text).strip():
@@ -693,6 +709,7 @@ def _swarm_driver(body: dict[str, Any], mgr: RunManager | None = None) -> Driver
             pentest_flag_required=bool(body.get("pentest_flag_required")
                                        if body.get("pentest_flag_required") is not None
                                        else ch.get("pentest_flag_required", False)),
+            **_geocache_challenge_kwargs(ch),
         )
         executor = body.get("executor", "cli")
         try:
@@ -1298,7 +1315,10 @@ def build_standby_driver(cmd: dict[str, Any], mgr: "RunManager | None" = None) -
         import json
         from pathlib import Path
 
-        from muteki.models.solve_graph import Challenge, EngagementGoal, parse_engagement_goal
+        from muteki.models.solve_graph import (
+            Challenge, EngagementGoal, normalize_challenge_mode,
+            parse_engagement_goal,
+        )
         from muteki.solver.cli_driver import driver_for
         from muteki.solver.cli_solver import CliSolver
         from muteki.solver.credential_accounts import account_store_root
@@ -1395,9 +1415,7 @@ def build_standby_driver(cmd: dict[str, Any], mgr: "RunManager | None" = None) -
                             break
             except Exception:
                 ch = {}
-        mode = ch.get("mode") or "ctf"
-        if mode not in ("ctf", "pentest"):
-            mode = "ctf"
+        mode = normalize_challenge_mode(ch.get("mode") or "ctf")
         engagement = None
         if mode == "pentest":
             raw_eg = ch.get("engagement")
@@ -1430,6 +1448,7 @@ def build_standby_driver(cmd: dict[str, Any], mgr: "RunManager | None" = None) -
             scope=ch.get("scope") or "",
             engagement=engagement,
             pentest_flag_required=bool(ch.get("pentest_flag_required", False)),
+            **_geocache_challenge_kwargs(ch),
         )
 
         wc = mgr.worker_config.resolve(challenge.category) if mgr is not None else {}

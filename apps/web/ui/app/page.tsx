@@ -1673,6 +1673,8 @@ function Deck() {
       if (opts.collectCount && opts.collectCount > 0) {
         challenge.expected_findings = opts.collectCount;
       }
+    } else if (opts?.mode === "geocache") {
+      challenge.mode = "geocache";
     } else {
       if (opts?.flagFormat === "token") {
         challenge.flag_format = "token";
