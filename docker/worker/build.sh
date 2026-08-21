@@ -39,12 +39,17 @@ file "$HERE/runtime_agent" 2>/dev/null || true
 echo ">> syncing muteki-blackboard skill into docker build context..."
 cp "$REPO/skills/muteki-blackboard/SKILL.md" "$HERE/blackboard.SKILL.md"
 cp "$REPO/skills/muteki-blackboard/blackboard.py" "$HERE/blackboard.py"
+cp "$REPO/skills/gc-blackboard/SKILL.md" "$HERE/gc-blackboard.SKILL.md"
+cp "$REPO/skills/gc-blackboard/blackboard.py" "$HERE/gc-blackboard.py"
+cp "$REPO/skills/gc-blackboard/coord_calc.py" "$HERE/coord_calc.py"
+rm -rf "$HERE/geocaching_cli"
+cp -a "$REPO/muteki/vendor/geocaching_cli" "$HERE/geocaching_cli"
 cp "$REPO/muteki/solver/deepseek_harness_worker.py" "$HERE/deepseek_harness_worker.py"
 cp "$REPO/muteki/solver/offline_acp_bridge.py" "$HERE/offline_acp_bridge.py"
 cp "$REPO/muteki/solver/omp_offline_config.yml" "$HERE/omp_offline_config.yml"
 cp "$REPO/muteki/solver/kimi_offline_agent.md" "$HERE/kimi_offline_agent.md"
 cp "$REPO/muteki/solver/grok_offline_agent.md" "$HERE/grok_offline_agent.md"
-chmod +x "$HERE/blackboard.py"
+chmod +x "$HERE/blackboard.py" "$HERE/gc-blackboard.py" "$HERE/coord_calc.py"
 
 # --platform linux/amd64 (full form, not the "amd64" shorthand) + --load forces the
 # docker exporter into the local image store. On arm64 Docker Desktop with the
@@ -119,6 +124,10 @@ docker run --rm --platform linux/amd64 --user kali \
     test -r /opt/muteki/grok_offline_agent.md
     test -x /opt/muteki/runtime_agent
     test -x /usr/local/bin/blackboard.py
+    test -r /opt/muteki/gc-blackboard/SKILL.md
+    test -x /opt/muteki/gc-blackboard/blackboard.py
+    test -x /opt/muteki/gc-blackboard/coord_calc.py
+    test -r /opt/muteki/gc-blackboard/vendor/geocaching_cli/coord.py
     command -v ghidra sage vol radare2 >/dev/null
   '
 echo ">> done: $TAG (+ $LATEST); all 9 engines verified"

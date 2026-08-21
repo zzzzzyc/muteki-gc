@@ -564,6 +564,131 @@ _REVIEW_PROMPT = (
     "state only; the normal flag gate already handled it."
 )
 
+# Geocache worker prompts. Separate constants — do not edit the CTF/pentest
+# strings above. Branched only when Challenge.mode == "geocache".
+_GC_EXEC_PROMPT = (
+    "You are an expert mystery-geocache solver with a FULL shell "
+    "(python3, gc, coord_calc.py, and common tooling). You are ONE lane in a "
+    "swarm, not a solo solver.\n\n"
+    "{ctx}\n"
+    "{kb}\n"
+    "This is a D3–D4 mystery. The final is constrained by the 3.2km anchor rule: "
+    "projected or derived finals stay near the posted coordinates (see the listing "
+    "anchor radius). Actually RUN commands and tools — do not just plan. Every "
+    "verified fact needs a real command or tool-output witness. Decoded "
+    "intermediate states are facts.\n\n"
+    "## Role priors (pick one lane; read deadends first)\n"
+    "  cipher — encodings, book/date/clock ciphers, letter-number maps.\n"
+    "  projection — bearing+distance, midpoint, grid/convert via coord_calc.py.\n"
+    "  lateral — wording, field objects, reading the listing without another "
+    "common cipher.\n\n"
+    "## Blackboard (highest-value call is read-deadends before a new direction)\n"
+    "  python3 blackboard.py read-directives\n"
+    "  python3 blackboard.py read-review\n"
+    "  python3 blackboard.py read-deadends\n"
+    "  python3 blackboard.py read-facts\n"
+    "  python3 blackboard.py read-routes\n"
+    "  python3 blackboard.py read-branches\n"
+    "  python3 coord_calc.py project \"<coord>\" <bearing_deg> <distance_m>\n"
+    "  gc show <GC> --json\n"
+    "If geocheck_url is set, claim `verifier:geocheck@<gc_code>` with risk class "
+    "rate-limited before `gc check`, then release it.\n\n"
+    "Print team markers from REAL output only:\n"
+    "  VERIFIED_FACT=<confirmed finding + witness path>\n"
+    "  DEADEND=<a reading/cipher/projection hypothesis you disproved>\n"
+    "A locally accepted candidate does not finish the run. Checksum or checker "
+    "verification does. Do not claim completion in prose.\n"
+    "When a coordinate candidate appears in REAL tool output, submit it with:\n"
+    "  python3 \"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'\n"
+    "Do not search the web for a cache writeup as a substitute for solving. "
+    "Configured web access may still be used for the listing, checker, or a "
+    "reference you actually need.\n\n"
+    "## If you are BLOCKED on something only the operator can give you\n"
+    "  NEED_INPUT=<the ONE specific thing the operator must supply>\n"
+    "  NEED_KIND=<external_blocker|lane_lock_request|route_dead_end|worker_uncertainty|operator_directive_needed>\n"
+    "Session errors use NEED_KIND=external_blocker."
+)
+
+_GC_EXPLORE_PROMPT = (
+    "You are an expert mystery-geocache solver with a FULL shell. You are ONE "
+    "lane in a swarm.\n\n"
+    "{ctx}\n"
+    "{kb}\n"
+    "## Your assigned direction\n"
+    "You have been assigned ONE specific exploration direction:\n"
+    "  {intent_goal}\n\n"
+    "Explore ONLY this D3–D4 mystery direction (cipher, projection, or lateral). "
+    "Stay inside the 3.2km posted-coordinate anchor. RUN real commands and "
+    "coord_calc.py / gc show. If the hypothesis is disproved, that is a valid "
+    "dead-end.\n\n"
+    "## What to output\n"
+    "  VERIFIED_FACT=<confirmed finding from REAL tool output>\n"
+    "  DEADEND=<why this reading/cipher/projection axis failed>\n"
+    "  NEED_INPUT=<an EXTERNAL blocker only the operator can fix>\n"
+    "  NEED_KIND=<external_blocker|lane_lock_request|route_dead_end|worker_uncertainty|operator_directive_needed>\n"
+    "  python3 \"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'  "
+    "(only after REAL output produced it)\n"
+    "Read-deadends before starting. A candidate is not verified. Do not claim "
+    "completion in prose. Do not search for a writeup as a substitute for solving."
+)
+
+_GC_REVIEW_PROMPT = (
+    "You are the Review-Arbiter for a mystery-geocache swarm. You do NOT solve "
+    "directly and you must NEVER declare the run finished. Audit the shared graph: "
+    "challenge weak coordinate/decoding facts, suppress repeated cipher or "
+    "projection loops, split conflicting branches, and keep lanes on "
+    "cipher / projection / lateral priors.\n\n"
+    "{ctx}\n"
+    "{kb}\n"
+    "## Review assignment\n{intent_goal}\n\n"
+    "## Full review board\n{review_board}\n\n"
+    "Workers submit coordinates only via submit-coord after real tool output; "
+    "Review never submits a coordinate or claims completion in prose. A locally "
+    "accepted candidate is not verified. D3–D4 mystery finals stay inside the "
+    "3.2km posted-coordinate anchor.\n"
+    "Output only machine-readable markers, one per line. Every challenge must carry "
+    "a follow-up action. Valid markers:\n"
+    "  REVIEW_FINDING=<json>\n"
+    "  FACT_CHALLENGE=<json>\n"
+    "  FACT_MERGE=<json>\n"
+    "  FACT_SUPERSEDE=<json>\n"
+    "  FACT_REJECT=<json>\n"
+    "  FACT_REVALIDATION=<json>\n"
+    "  ROUTE_SUPPRESS=<json>\n"
+    "  ROUTE_REOPEN=<json>\n"
+    "  BRANCH_SPLIT=<json>\n"
+    "  LANE_LOCK=<json>\n"
+    "  LANE_UNLOCK=<json>\n"
+    "  COORDINATOR_DIRECTIVE=<json>\n"
+    "  NEXT_INTENT=<json>\n"
+    "  NEED_INPUT=<text>\n"
+    "  NEED_KIND=<external_blocker|lane_lock_request|route_dead_end|worker_uncertainty|operator_directive_needed>\n\n"
+    "DEDUP IS THE #1 JOB. Restated verified facts must be FACT_MERGE, not "
+    "FACT_CHALLENGE. Prefer next intents that read-deadends and then test a "
+    "fresh cipher, projection, or lateral axis. Do not treat a writeup search as "
+    "progress."
+)
+
+_GC_RESUME_PROMPT = (
+    "CONCLUDE: stop exploring now. If you already saw a coordinate candidate in "
+    "REAL tool output this session, submit it through `python3 "
+    "\"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'`. A locally accepted "
+    "candidate does not finish the run. Otherwise report the furthest confirmed "
+    "fact. Do not guess. Do not claim completion in prose."
+)
+
+_GC_EXPLORE_CONCLUDE_PROMPT = (
+    "CONCLUDE: stop exploring NOW. Do not run any more commands.\n"
+    "Summarize ONLY what you have already confirmed in REAL output, using these "
+    "markers on their own lines:\n"
+    "  VERIFIED_FACT=<a confirmed finding from real output>\n"
+    "  DEADEND=<why this direction failed>\n"
+    "  python3 \"$MUTEKI_BLACKBOARD_SCRIPT\" submit-coord '<candidate>'  "
+    "(only if seen in real output this session)\n"
+    "If you found nothing, output DEADEND=<reason>. Do not guess. Do not claim "
+    "completion in prose."
+)
+
 # Capture EVERYTHING after FOUND_FLAG= to end-of-line (not \S+), so a flag whose
 # body legitimately contains SPACES (e.g. CTF flags like `flag{H1570rY 12'N7 ...}`)
 # isn't truncated at the first space. _clean_flag_token() then extracts the real
@@ -1498,6 +1623,7 @@ class CliSolver:
                 skill_workdir,
                 engine=self.driver.name,
                 container=self.container is not None,
+                mode=getattr(self.challenge, "mode", "ctf") or "ctf",
             )
 
         env_extra = getattr(self.driver, "env_extra", None)
@@ -4469,6 +4595,33 @@ class CliSolver:
             "Reproduction and value judgment are separate from Review.\n\n"
         )
 
+    def _geocache_listing_block(self) -> str:
+        c = self.challenge
+        if getattr(c, "mode", "ctf") != "geocache":
+            return ""
+        lines = ["## Geocache listing"]
+        if getattr(c, "gc_code", ""):
+            lines.append(f"GC code: {c.gc_code}")
+        lat = getattr(c, "posted_lat", None)
+        lon = getattr(c, "posted_lon", None)
+        if lat is not None and lon is not None:
+            lines.append(f"Posted coordinates: {lat}, {lon}")
+        if getattr(c, "coord_skeleton", ""):
+            lines.append(f"Coordinate skeleton: {c.coord_skeleton}")
+        checksum = getattr(c, "digit_checksum", None)
+        if checksum is not None:
+            lines.append(f"Digit checksum: {checksum}")
+        if getattr(c, "geocheck_url", ""):
+            lines.append(f"Checker URL: {c.geocheck_url}")
+        radius = getattr(c, "anchor_radius_m", 3200.0)
+        if radius is None:
+            radius = 3200.0
+        lines.append(
+            f"Anchor radius: {radius:g} m (D3–D4 mystery finals stay within "
+            f"3.2 km of posted unless listing says otherwise)"
+        )
+        return "\n".join(lines)
+
     def _explore_conclude_text(self) -> str:
         if self.mode == "verifier":
             return (
@@ -4476,12 +4629,18 @@ class CliSolver:
                 "report witness, print REPRODUCED=yes and REPRO_WITNESS=<snippet>. "
                 "Otherwise print REPRODUCED=no and REPRO_REASON=<why>."
             )
-        if getattr(self.challenge, "mode", "ctf") == "pentest":
+        challenge_mode = getattr(self.challenge, "mode", "ctf")
+        if challenge_mode == "geocache":
+            return _GC_EXPLORE_CONCLUDE_PROMPT
+        if challenge_mode == "pentest":
             return _PENTEST_EXPLORE_CONCLUDE_PROMPT
         return _EXPLORE_CONCLUDE_PROMPT
 
     def _resume_text(self) -> str:
-        if getattr(self.challenge, "mode", "ctf") == "pentest":
+        challenge_mode = getattr(self.challenge, "mode", "ctf")
+        if challenge_mode == "geocache":
+            return _GC_RESUME_PROMPT
+        if challenge_mode == "pentest":
             return _PENTEST_RESUME_PROMPT
         return _RESUME_PROMPT
 
@@ -4497,6 +4656,9 @@ class CliSolver:
                 "FIRST): " + ", ".join(self._staged_files))
         if c.description:
             ctx_lines.append(f"Brief: {c.description.strip()[:600]}")
+        listing = self._geocache_listing_block()
+        if listing:
+            ctx_lines.append(listing)
         if not bool(getattr(self, "web_access", True)):
             ctx_lines.append(
                 "\n## Offline black-box evaluation boundary\n"
@@ -4546,7 +4708,11 @@ class CliSolver:
         rejected = self._rejected_flags_block()
         if rejected:
             ctx_lines.append(rejected)
-        # pentest mode → goal-driven prompt (no flag); else the unchanged CTF prompt.
+        # geocache mode → mystery prompts; pentest → goal-driven; else CTF.
+        if getattr(c, "mode", "ctf") == "geocache":
+            return _GC_EXEC_PROMPT.format(
+                ctx="\n".join(ctx_lines),
+                kb=_KB_PROMPT if self.kb else "")
         if getattr(c, "mode", "ctf") == "pentest":
             ctx_lines.append(self._box_mode_line())
             return _PENTEST_EXEC_PROMPT.format(
@@ -5399,6 +5565,9 @@ class CliSolver:
                 "FIRST): " + ", ".join(self._staged_files))
         if c.description:
             ctx_lines.append(f"Brief: {c.description.strip()[:600]}")
+        listing = self._geocache_listing_block()
+        if listing:
+            ctx_lines.append(listing)
         cognitive = self._cognitive_context_block()
         if cognitive:
             ctx_lines.append(cognitive)
@@ -5423,6 +5592,11 @@ class CliSolver:
         rejected = self._rejected_flags_block()
         if rejected:
             ctx_lines.append(rejected)
+        if getattr(c, "mode", "ctf") == "geocache":
+            return _GC_EXPLORE_PROMPT.format(
+                ctx="\n".join(ctx_lines),
+                kb=_KB_PROMPT if self.kb else "",
+                intent_goal=self.intent_goal or "general exploration")
         if getattr(c, "mode", "ctf") == "pentest":
             if self.mode == "verifier":
                 report_json = self.intent_goal or "{}"
@@ -5452,6 +5626,9 @@ class CliSolver:
             ctx_lines.append(f"Target: {tgt}")
         if c.description:
             ctx_lines.append(f"Brief: {c.description.strip()[:1000]}")
+        listing = self._geocache_listing_block()
+        if listing:
+            ctx_lines.append(listing)
         cognitive = self._cognitive_context_block()
         if cognitive:
             ctx_lines.append(cognitive)
@@ -5464,6 +5641,12 @@ class CliSolver:
                 review_board = self.shared_graph.to_review_summary()
             except Exception:
                 review_board = self._board_markdown()
+        if getattr(c, "mode", "ctf") == "geocache":
+            return _GC_REVIEW_PROMPT.format(
+                ctx="\n".join(ctx_lines),
+                kb=_KB_PROMPT if self.kb else "",
+                intent_goal=self.intent_goal or "Audit the current swarm trajectory.",
+                review_board=review_board or "(no shared graph available)")
         return _REVIEW_PROMPT.format(
             ctx="\n".join(ctx_lines),
             kb=_KB_PROMPT if self.kb else "",

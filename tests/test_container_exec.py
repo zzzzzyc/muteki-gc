@@ -112,6 +112,30 @@ def test_worker_image_keeps_blackboard_out_of_agent_user_scopes():
     assert "/home/kali/.agents/skills/muteki-blackboard" not in dockerfile
 
 
+def test_worker_images_ship_gc_blackboard_and_coord_vendor():
+    """Full and slim images bake the immutable GC skill + vendor fallback."""
+    repo = os.path.dirname(os.path.dirname(__file__))
+    pairs = (
+        ("docker/worker/Dockerfile", "docker/worker/build.sh"),
+        ("docker/worker-slim/Dockerfile", "docker/worker-slim/build.sh"),
+    )
+    for docker_rel, build_rel in pairs:
+        dockerfile = open(os.path.join(repo, docker_rel), encoding="utf-8").read()
+        build_sh = open(os.path.join(repo, build_rel), encoding="utf-8").read()
+        assert "gc-blackboard" in build_sh
+        assert "coord_calc.py" in build_sh
+        assert "geocaching_cli" in build_sh
+        assert "/opt/muteki/gc-blackboard/SKILL.md" in dockerfile
+        assert "/opt/muteki/gc-blackboard/blackboard.py" in dockerfile
+        assert "/opt/muteki/gc-blackboard/coord_calc.py" in dockerfile
+        assert "/opt/muteki/gc-blackboard/vendor/geocaching_cli" in dockerfile
+        assert "/home/kali/.claude/skills/gc-blackboard" not in dockerfile
+        assert "/home/kali/.agents/skills/gc-blackboard" not in dockerfile
+    slim_build = open(os.path.join(repo, "docker/worker-slim/build.sh"), encoding="utf-8").read()
+    assert "docker/worker/AGENTS.md" in slim_build
+
+
+
 def test_worker_images_wrap_package_managers_with_auto_sudo():
     """Slim workers are intentionally light, but agents must be able to install
     missing tools even when they forget to prefix apt/dpkg commands with sudo."""

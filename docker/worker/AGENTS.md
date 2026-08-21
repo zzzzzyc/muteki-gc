@@ -86,3 +86,12 @@ blackboard.py submit-flag '<flag>'
 
 普通回复、`FOUND_FLAG=` 文本和正则匹配结果都不会完成任务。提交前保留产生该 Flag 的真实命令
 输出或产物；Coordinator 会将 API 提交与当前 Worker 已捕获的执行证据进行校验。
+
+# Geocache（mode=geocache）
+
+当前题目是 geocache 时，额外使用 `gc-blackboard` 技能和 `coord_calc.py`。先读
+directives / review / deadends，再读 facts / routes / branches。死路表示一条解读、
+密码轴或投影假设已被证伪。坐标用 `submit-coord` 提交，不要使用 `submit-flag` 或
+`FOUND_FLAG`。本地接受的 candidate 不会结束任务。若存在 `geocheck_url`，在
+`gc check` 前领取 `verifier:geocheck@<gc_code>`（`--risk-class rate-limited`），
+结束后释放。

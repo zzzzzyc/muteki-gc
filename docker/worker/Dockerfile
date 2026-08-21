@@ -205,9 +205,15 @@ COPY ./AGENTS.md /opt/muteki/AGENTS.md
 COPY ./AGENTS.md /opt/muteki/CLAUDE.md
 COPY ./blackboard.SKILL.md /opt/muteki/muteki-blackboard/SKILL.md
 COPY ./blackboard.py /opt/muteki/muteki-blackboard/blackboard.py
+COPY ./gc-blackboard.SKILL.md /opt/muteki/gc-blackboard/SKILL.md
+COPY ./gc-blackboard.py /opt/muteki/gc-blackboard/blackboard.py
+COPY ./coord_calc.py /opt/muteki/gc-blackboard/coord_calc.py
+COPY ./geocaching_cli /opt/muteki/gc-blackboard/vendor/geocaching_cli
 RUN chmod +x /opt/muteki/muteki-blackboard/blackboard.py && \
     cp /opt/muteki/muteki-blackboard/blackboard.py /usr/local/bin/blackboard.py && \
-    chmod +x /usr/local/bin/blackboard.py
+    chmod +x /usr/local/bin/blackboard.py && \
+    chmod +x /opt/muteki/gc-blackboard/blackboard.py \
+             /opt/muteki/gc-blackboard/coord_calc.py
 
 # 9) workspace + control dir; supervisor as ENTRYPOINT (PID1, replaces sleep infinity).
 RUN mkdir -p /home/kali/workspace && chown kali:kali /home/kali/workspace && \

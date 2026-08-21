@@ -328,5 +328,120 @@ def test_stage_blackboard_skill_is_worker_local_for_all_engines(tmp_path, engine
         assert link.is_symlink()
         assert (link / "SKILL.md").is_file()
         assert (link / "blackboard.py").is_file()
+        assert link.name == "muteki-blackboard"
     assert personal.read_text() == "keep me\n"
     assert not (user_home / ".agents" / "skills" / "muteki-blackboard").exists()
+
+
+_NINE_ENGINES = (
+    "claude", "codex", "cursor", "pi", "omp", "kimi", "grok", "opencode", "dsh",
+)
+
+
+def test_stage_blackboard_skill_accepts_mode_default_ctf():
+    import inspect
+
+    from muteki.solver.worker_skills import stage_blackboard_skill
+
+    params = inspect.signature(stage_blackboard_skill).parameters
+    assert "mode" in params
+    assert params["mode"].default == "ctf"
+
+
+@pytest.mark.parametrize("engine", list(_NINE_ENGINES))
+@pytest.mark.parametrize("mode", ["ctf", "pentest", ""])
+def test_stage_ctf_and_pentest_only_project_base_skill(tmp_path, engine, mode):
+    from muteki.solver.worker_skills import project_skill_roots, stage_blackboard_skill
+
+    worker = tmp_path / "worker"
+    staged = stage_blackboard_skill(worker, engine=engine, mode=mode or "ctf")
+    names = {Path(path).name for path in staged}
+    assert names == {"muteki-blackboard"}
+    assert len(staged) == len(project_skill_roots(engine))
+    assert not any(
+        (worker / root / "gc-blackboard").exists()
+        for root in project_skill_roots(engine)
+    )
+
+
+@pytest.mark.parametrize("engine", list(_NINE_ENGINES))
+def test_stage_geocache_projects_both_skills_for_all_engines(tmp_path, engine):
+    from muteki.solver.worker_skills import project_skill_roots, stage_blackboard_skill
+
+    worker = tmp_path / "worker"
+    staged = stage_blackboard_skill(worker, engine=engine, mode="geocache")
+    names = {Path(path).name for path in staged}
+    assert names == {"muteki-blackboard", "gc-blackboard"}
+    assert len(staged) == 2 * len(project_skill_roots(engine))
+    for path in staged:
+        link = Path(path)
+        assert link.is_symlink()
+        assert (link / "SKILL.md").is_file()
+        assert (link / "blackboard.py").is_file()
+        if link.name == "gc-blackboard":
+            assert (link / "coord_calc.py").is_file()
+
+
+def test_stage_geocache_preserves_operator_provided_skill_dirs(tmp_path):
+    from muteki.solver.worker_skills import stage_blackboard_skill
+
+    worker = tmp_path / "worker"
+    skills = worker / ".claude" / "skills"
+    for name, body in (
+        ("muteki-blackboard", "operator muteki\n"),
+        ("gc-blackboard", "operator gc\n"),
+    ):
+        dest = skills / name
+        dest.mkdir(parents=True)
+        (dest / "SKILL.md").write_text(body)
+
+    staged = stage_blackboard_skill(worker, engine="claude", mode="geocache")
+    assert (skills / "muteki-blackboard" / "SKILL.md").read_text() == "operator muteki\n"
+    assert (skills / "gc-blackboard" / "SKILL.md").read_text() == "operator gc\n"
+    assert not (skills / "muteki-blackboard").is_symlink()
+    assert not (skills / "gc-blackboard").is_symlink()
+    assert {Path(path).name for path in staged} == {"muteki-blackboard", "gc-blackboard"}
+
+
+def test_stage_container_maps_immutable_gc_and_base_roots(tmp_path):
+    from muteki.solver.worker_skills import project_skill_roots, stage_blackboard_skill
+
+    worker = tmp_path / "worker"
+    ctf = stage_blackboard_skill(worker / "ctf", engine="cursor", container=True)
+    for path in ctf:
+        assert Path(path).name == "muteki-blackboard"
+        assert os.readlink(path) == "/opt/muteki/muteki-blackboard"
+        assert Path(path).parent.name == "skills"
+
+    gc = stage_blackboard_skill(
+        worker / "gc", engine="cursor", container=True, mode="geocache",
+    )
+    mapped = {Path(path).name: os.readlink(path) for path in gc}
+    assert mapped["muteki-blackboard"] == "/opt/muteki/muteki-blackboard"
+    assert mapped["gc-blackboard"] == "/opt/muteki/gc-blackboard"
+    assert len(gc) == 2 * len(project_skill_roots("cursor"))
+
+
+def test_cli_solver_passes_challenge_mode_to_skill_staging(tmp_path, monkeypatch):
+    captured: dict = {}
+
+    def fake_stage(workdir, *, engine, container=False, mode="ctf"):
+        captured.update(
+            workdir=str(workdir), engine=engine, container=container, mode=mode,
+        )
+        return []
+
+    monkeypatch.setattr(
+        "muteki.solver.worker_skills.stage_blackboard_skill", fake_stage,
+    )
+    ch = Challenge(
+        id="gc1", name="cache", category="misc", mode="geocache", gc_code="GC8ABCD",
+    )
+    solver = CliSolver(
+        type("S", (), {"solver_id": "cli-1"})(),
+        ch, kb=False, engine="claude", workdir=str(tmp_path / "ws"),
+    )
+    solver._worker_env()
+    assert captured["mode"] == "geocache"
+    assert captured["engine"] == "claude"
+    assert captured["container"] is False

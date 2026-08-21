@@ -12,6 +12,10 @@ docker/worker/runtime_agent
 docker/worker/blackboard.py
 docker/worker/deepseek_harness_worker.py
 docker/worker/blackboard.SKILL.md
+docker/worker/gc-blackboard.py
+docker/worker/gc-blackboard.SKILL.md
+docker/worker/coord_calc.py
+docker/worker/geocaching_cli/
 docker/worker/offline_acp_bridge.py
 docker/worker/omp_offline_config.yml
 docker/worker/kimi_offline_agent.md
@@ -24,6 +28,10 @@ docker/worker-slim/AGENTS.md
 docker/worker-slim/blackboard.py
 docker/worker-slim/deepseek_harness_worker.py
 docker/worker-slim/blackboard.SKILL.md
+docker/worker-slim/gc-blackboard.py
+docker/worker-slim/gc-blackboard.SKILL.md
+docker/worker-slim/coord_calc.py
+docker/worker-slim/geocaching_cli/
 docker/worker-slim/offline_acp_bridge.py
 docker/worker-slim/omp_offline_config.yml
 docker/worker-slim/kimi_offline_agent.md
