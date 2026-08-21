@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gpx xmlns="http://www.topografix.com/GPX/1/0" version="1.0" creator="Groundspeak Pocket Query">
+  <name>Sample Pocket Query Waypoints</name>
+  <wpt lat="39.903000" lon="116.405000">
+    <name>GC1A2B3-P</name>
+    <cmt>Parking for Forbidden City Cache</cmt>
+    <desc>Parking Area</desc>
+    <sym>Parking Area</sym>
+    <type>Waypoint|Parking Area</type>
+  </wpt>
+  <wpt lat="39.998200" lon="116.274000">
+    <name>GC3E4F5-1</name>
+    <cmt>Stage 1 reference</cmt>
+    <desc>Reference Point</desc>
+    <sym>Reference Point</sym>
+    <type>Waypoint|Reference Point</type>
+  </wpt>
+</gpx>

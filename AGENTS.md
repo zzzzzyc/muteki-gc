@@ -98,6 +98,7 @@ README、ROADMAP 和历史会话记录只提供背景信息。
 | Worker 设置界面 | `apps/web/ui/components/WorkerOrchestration.tsx` |
 | TUI | `apps/tui/` |
 | Worker 容器 | `docker/worker/`、`docker/worker-slim/` |
+| 捆绑 GC CLI | `third_party/geocaching-cli/`（独立 venv，勿写入 Muteki `.venv`） |
 
 ## 常用命令
 

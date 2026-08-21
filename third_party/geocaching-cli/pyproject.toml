@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geocaching-cli"
+version = "0.2.0"
+description = "Personal Geocaching.com CLI: Playwright login, search, show, logs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "geocaching-cli contributors" }]
+keywords = ["geocaching", "cli", "playwright"]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "pycaching>=4.4,<5",
+    "playwright>=1.49",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+]
+
+[project.scripts]
+gc = "geocaching_cli.cli:main"
+geocaching-cli = "geocaching_cli.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/zzzzzyc/geocaching-cli"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "live: hits geocaching.com (credentials + Playwright)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]

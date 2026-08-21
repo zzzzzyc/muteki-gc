@@ -21,11 +21,12 @@
 
 - Muteki：`zzzzzyc/muteki-gc`，
   `cursor/muteki-gc-geocache-mode-4ace`
-- GC CLI：`zzzzzyc/geocaching-cli`，
-  `cursor/geocache-api-build-4ace`
+- GC CLI 源码：本仓库 `third_party/geocaching-cli/`
+  （对应 `zzzzzyc/geocaching-cli` @ `06d9a75`，含 `gc serve` / `gc check`）
 
-`geocaching-cli` 继续保持独立仓库。Muteki 的 Cloud 安装脚本从公开仓库安装已发布
-接口；本地开发可用 editable install。
+`geocaching-cli` 上游仓库仍在。Cloud Agent 对该仓库没有写权限，因此
+`gc serve` / `gc check` 随 Muteki 一起落地。安装必须用独立 venv，不要写进
+Muteki 的 `.venv`。
 
 ## 安全和凭据
 

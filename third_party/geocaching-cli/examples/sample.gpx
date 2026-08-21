@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gpx xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     version="1.0"
+     creator="Groundspeak Pocket Query"
+     xsi:schemaLocation="http://www.topografix.com/GPX/1/0 http://www.topografix.com/GPX/1/0/gpx.xsd http://www.groundspeak.com/cache/1/0/1 http://www.groundspeak.com/cache/1/0/1/cache.xsd"
+     xmlns="http://www.topografix.com/GPX/1/0"
+     xmlns:groundspeak="http://www.groundspeak.com/cache/1/0/1">
+  <name>Sample Pocket Query</name>
+  <desc>Synthetic Pocket Query used as an offline fixture. Not live site data.</desc>
+  <author>geocaching-cli</author>
+  <time>2024-06-01T00:00:00Z</time>
+  <keywords>cache, geocache, groundspeak</keywords>
+  <bounds minlat="39.800000" minlon="116.200000" maxlat="40.100000" maxlon="116.600000"/>
+
+  <wpt lat="39.904200" lon="116.407400">
+    <time>2001-09-03T07:00:00Z</time>
+    <name>GC1A2B3</name>
+    <desc>Forbidden City Cache by SampleOwner, Traditional Cache (2/2)</desc>
+    <url>https://www.geocaching.com/seek/cache_details.aspx?wp=GC1A2B3</url>
+    <urlname>Forbidden City Cache</urlname>
+    <sym>Geocache</sym>
+    <type>Geocache|Traditional Cache</type>
+    <groundspeak:cache id="1001" available="True" archived="False">
+      <groundspeak:name>Forbidden City Cache</groundspeak:name>
+      <groundspeak:placed_by>SampleOwner</groundspeak:placed_by>
+      <groundspeak:owner id="1">SampleOwner</groundspeak:owner>
+      <groundspeak:type>Traditional Cache</groundspeak:type>
+      <groundspeak:container>Regular</groundspeak:container>
+      <groundspeak:attributes>
+        <groundspeak:attribute id="13" inc="1">Available at all times</groundspeak:attribute>
+        <groundspeak:attribute id="6" inc="1">Recommended for kids</groundspeak:attribute>
+      </groundspeak:attributes>
+      <groundspeak:difficulty>2</groundspeak:difficulty>
+      <groundspeak:terrain>2</groundspeak:terrain>
+      <groundspeak:country>China</groundspeak:country>
+      <groundspeak:state>Beijing</groundspeak:state>
+      <groundspeak:short_description html="False">A short traditional cache near the palace museum.</groundspeak:short_description>
+      <groundspeak:long_description html="True">Look for a regular container. This is synthetic fixture text.</groundspeak:long_description>
+      <groundspeak:encoded_hints>Look under the bench</groundspeak:encoded_hints>
+      <groundspeak:logs>
+        <groundspeak:log id="9001">
+          <groundspeak:date>2024-05-01T12:00:00Z</groundspeak:date>
+          <groundspeak:type>Found it</groundspeak:type>
+          <groundspeak:finder id="2">FinderOne</groundspeak:finder>
+          <groundspeak:text encoded="False">TFTC! Beautiful spot.</groundspeak:text>
+        </groundspeak:log>
+        <groundspeak:log id="9002">
+          <groundspeak:date>2024-04-12T09:30:00Z</groundspeak:date>
+          <groundspeak:type>Found it</groundspeak:type>
+          <groundspeak:finder id="3">FinderTwo</groundspeak:finder>
+          <groundspeak:text encoded="False">Quick find.</groundspeak:text>
+        </groundspeak:log>
+      </groundspeak:logs>
+      <groundspeak:travelbugs />
+    </groundspeak:cache>
+  </wpt>
+
+  <wpt lat="39.882200" lon="116.406600">
+    <time>2010-03-21T08:00:00Z</time>
+    <name>GC2C3D4</name>
+    <desc>Temple of Heaven Puzzle by MysteryOwner, Unknown Cache (3.5/2)</desc>
+    <url>https://www.geocaching.com/seek/cache_details.aspx?wp=GC2C3D4</url>
+    <urlname>Temple of Heaven Puzzle</urlname>
+    <sym>Geocache</sym>
+    <type>Geocache|Unknown Cache</type>
+    <groundspeak:cache id="1002" available="True" archived="False">
+      <groundspeak:name>Temple of Heaven Puzzle</groundspeak:name>
+      <groundspeak:placed_by>MysteryOwner</groundspeak:placed_by>
+      <groundspeak:owner id="4">MysteryOwner</groundspeak:owner>
+      <groundspeak:type>Unknown Cache</groundspeak:type>
+      <groundspeak:container>Small</groundspeak:container>
+      <groundspeak:difficulty>3.5</groundspeak:difficulty>
+      <groundspeak:terrain>2</groundspeak:terrain>
+      <groundspeak:country>China</groundspeak:country>
+      <groundspeak:state>Beijing</groundspeak:state>
+      <groundspeak:short_description html="False">Solve the checksum, then go.</groundspeak:short_description>
+      <groundspeak:long_description html="False">Puzzle statement: the posted coordinates are not the cache.</groundspeak:long_description>
+      <groundspeak:encoded_hints>Digits sum to a useful number</groundspeak:encoded_hints>
+      <groundspeak:logs>
+        <groundspeak:log id="9003">
+          <groundspeak:date>2024-02-02T16:00:00Z</groundspeak:date>
+          <groundspeak:type>Didn't find it</groundspeak:type>
+          <groundspeak:finder id="5">Seeker</groundspeak:finder>
+          <groundspeak:text encoded="False">Need to recheck the math.</groundspeak:text>
+        </groundspeak:log>
+      </groundspeak:logs>
+    </groundspeak:cache>
+  </wpt>
+
+  <wpt lat="39.999000" lon="116.275500">
+    <time>2015-07-11T02:00:00Z</time>
+    <name>GC3E4F5</name>
+    <desc>Summer Palace Trail by MultiOwner, Multi-cache (2.5/3)</desc>
+    <url>https://www.geocaching.com/seek/cache_details.aspx?wp=GC3E4F5</url>
+    <urlname>Summer Palace Trail</urlname>
+    <sym>Geocache</sym>
+    <type>Geocache|Multi-cache</type>
+    <groundspeak:cache id="1003" available="True" archived="False">
+      <groundspeak:name>Summer Palace Trail</groundspeak:name>
+      <groundspeak:placed_by>MultiOwner</groundspeak:placed_by>
+      <groundspeak:owner id="6">MultiOwner</groundspeak:owner>
+      <groundspeak:type>Multi-cache</groundspeak:type>
+      <groundspeak:container>Micro</groundspeak:container>
+      <groundspeak:difficulty>2.5</groundspeak:difficulty>
+      <groundspeak:terrain>3</groundspeak:terrain>
+      <groundspeak:country>China</groundspeak:country>
+      <groundspeak:state>Beijing</groundspeak:state>
+      <groundspeak:short_description html="False">Stage one is at the posted coords.</groundspeak:short_description>
+      <groundspeak:long_description html="False">Collect digits along the lakeside path.</groundspeak:long_description>
+      <groundspeak:encoded_hints>Magnetic</groundspeak:encoded_hints>
+    </groundspeak:cache>
+  </wpt>
+
+  <wpt lat="39.936500" lon="116.394000">
+    <time>2008-11-01T00:00:00Z</time>
+    <name>GC4G5H6</name>
+    <desc>Archived Hutong by OldOwner, Traditional Cache (1.5/1.5)</desc>
+    <url>https://www.geocaching.com/seek/cache_details.aspx?wp=GC4G5H6</url>
+    <urlname>Archived Hutong</urlname>
+    <sym>Geocache</sym>
+    <type>Geocache|Traditional Cache</type>
+    <groundspeak:cache id="1004" available="False" archived="True">
+      <groundspeak:name>Archived Hutong</groundspeak:name>
+      <groundspeak:placed_by>OldOwner</groundspeak:placed_by>
+      <groundspeak:owner id="7">OldOwner</groundspeak:owner>
+      <groundspeak:type>Traditional Cache</groundspeak:type>
+      <groundspeak:container>Micro</groundspeak:container>
+      <groundspeak:difficulty>1.5</groundspeak:difficulty>
+      <groundspeak:terrain>1.5</groundspeak:terrain>
+      <groundspeak:country>China</groundspeak:country>
+      <groundspeak:state>Beijing</groundspeak:state>
+      <groundspeak:short_description html="False">Retired cache kept for import tests.</groundspeak:short_description>
+      <groundspeak:long_description html="False">Archived on purpose.</groundspeak:long_description>
+    </groundspeak:cache>
+  </wpt>
+</gpx>
