@@ -670,7 +670,7 @@ class _ReviewLocksMixin:
             "unreachable", "connection refused", "refused", "timed out",
             "timeout", "expired", "instance", "502", "503", "down",
             "credential", "vps", "attachment", "token", "runtime",
-            "container", "凭据", "附件",
+            "container", "凭据", "附件", "过期",
         )):
             return "external_blocker"
         return "worker_uncertainty"

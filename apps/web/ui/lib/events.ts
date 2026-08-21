@@ -32,6 +32,7 @@ export enum EventType {
   STALLED = "guard.stalled",
   GUIDANCE_INJECTED = "coordinator.guidance",
   HITL_REQUEST = "hitl.request",
+  HITL_RESOLVED = "hitl.resolved",
   HITL_RESPONSE = "hitl.response",
   CONTROL_COMMAND = "control.command",
   HITL_TRANSLATED = "hitl.translated",
@@ -2474,6 +2475,13 @@ export function reduce(prev: DeckState, ev: MutekiEvent): DeckState {
         role: "agent", solverId: sid || undefined, kind: "text",
         content: `${lead}: ${need}`, ts: ev.ts,
       });
+      break;
+    }
+    case EventType.HITL_RESOLVED: {
+      const requestId = String(p.request_id ?? p.requestId ?? p.id ?? "");
+      if (requestId) {
+        s.hitlRequests = s.hitlRequests.filter((r) => r.id !== requestId);
+      }
       break;
     }
     case EventType.HITL_RESPONSE: {

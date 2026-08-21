@@ -25,6 +25,7 @@ from muteki.core.cost import CostController
 from muteki.core.event_bus import EventBus
 from muteki.core.runtime_env import is_web_container
 from muteki.core.events import Event, EventType, blackboard_delta_payload
+from muteki.solver.gc_session_watchdog import watch_gc_session
 from muteki.core.llm import LLMClient, ModelSpec
 from muteki.models.solve_graph import Challenge
 from muteki.sandbox.manager import SandboxManager
@@ -115,6 +116,28 @@ class _CoordinatorLoopMixin:
         # of RunManager's meta sink. Best-effort; never raises into a worker's emit.
         if self.bus is not None:
             async def _help_sink(ev: Event) -> None:
+                if ev.event_type is EventType.HITL_RESOLVED:
+                    payload = dict(ev.payload or {})
+                    rid = str(payload.get("request_id") or payload.get("id") or "")
+                    if rid:
+                        self._pending_help = [
+                            h for h in self._pending_help
+                            if str(h.get("request_id") or h.get("id") or "") != rid
+                        ]
+                    if not self._pending_help and not self._control_frozen:
+                        self._operator_paused = False
+                    if self._operator_event is not None:
+                        self._operator_event.set()
+                    try:
+                        asyncio.create_task(self._emit_coord_bb(
+                            "hitl_resolved",
+                            worker=str(payload.get("worker") or ""),
+                            request_id=rid,
+                            reason=str(payload.get("reason") or ""),
+                        ))
+                    except Exception:
+                        pass
+                    return
                 if ev.event_type is EventType.HITL_REQUEST:
                     # M6: dedup on (worker, need) and cap the list. The per-worker
                     # marker dedup is per-worker, so the SAME blocker raised by N
@@ -283,6 +306,49 @@ class _CoordinatorLoopMixin:
             hitl_task = asyncio.create_task(
                 self._supervise_control_drain(), name="hitl-drain")
 
+        async def _run_gc_session_watchdog() -> None:
+            raw_interval = os.environ.get("MUTEKI_GC_SESSION_POLL_INTERVAL") or "60"
+            try:
+                interval_s = float(raw_interval)
+            except (TypeError, ValueError):
+                interval_s = 60.0
+            interval_s = max(1.0, interval_s)
+            status_url = (
+                os.environ.get("MUTEKI_GC_STATUS_URL")
+                or "http://127.0.0.1:8765/api/status"
+            )
+            try:
+                await watch_gc_session(
+                    self.bus,
+                    run_id=self.run_id,
+                    challenge_id=self.challenge.id,
+                    status_url=status_url,
+                    interval_s=interval_s,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                try:
+                    await self._emit_coord_bb(
+                        "gc_session_watchdog_failed",
+                        detail="session watchdog stopped unexpectedly",
+                    )
+                except Exception:
+                    pass
+
+        watchdog_task: Optional[asyncio.Task] = None
+        if getattr(self.challenge, "mode", "") == "geocache" and self.bus is not None:
+            watchdog_task = asyncio.create_task(
+                _run_gc_session_watchdog(), name="gc-session-watchdog")
+
+        supervisor_tasks = [t for t in (hitl_task, watchdog_task) if t is not None]
+
+        async def _stop_supervisor_tasks() -> None:
+            for task in supervisor_tasks:
+                task.cancel()
+            if supervisor_tasks:
+                await asyncio.gather(*supervisor_tasks, return_exceptions=True)
+
         tasks: dict[asyncio.Task, str] = {}        # task -> engine
         task_intents: dict[asyncio.Task, str] = {}  # task -> intent_id
         task_solvers: dict[asyncio.Task, Any] = {}  # task -> CliSolver (to cancel)
@@ -341,9 +407,7 @@ class _CoordinatorLoopMixin:
                         lane_key=str(task_lanes.get(task) or ""),
                     )
                     released_ids.add(sid)
-            if hitl_task is not None:
-                hitl_task.cancel()
-                await asyncio.gather(hitl_task, return_exceptions=True)
+            await _stop_supervisor_tasks()
             if self._shutdown_owners_incomplete():
                 self._retain_control_shutdown_owner(
                     winner=winner, flag=flag, goal_complete=goal_complete,
@@ -368,9 +432,7 @@ class _CoordinatorLoopMixin:
                 reason="NoEligibleEngine",
                 configured_engines=list(self.engines),
             )
-            if hitl_task is not None:
-                hitl_task.cancel()
-                await asyncio.gather(hitl_task, return_exceptions=True)
+            await _stop_supervisor_tasks()
             await self._finalize_coordinator_run(
                 winner=None, flag=None, goal_complete=False,
                 per_solver=per_solver,
@@ -419,9 +481,7 @@ class _CoordinatorLoopMixin:
                 # fast path: reuse the winner-exit shape (persist + close + RUN_FINISHED)
                 # via the shared M11 finalizer (idempotent).
                 winner, flag = race_winner, race_flag
-                if hitl_task is not None:
-                    hitl_task.cancel()
-                    await asyncio.gather(hitl_task, return_exceptions=True)
+                await _stop_supervisor_tasks()
                 if self._shutdown_owners_incomplete():
                     self._retain_control_shutdown_owner(
                         winner=winner, flag=flag, goal_complete=goal_complete,
@@ -2714,9 +2774,7 @@ class _CoordinatorLoopMixin:
                     except Exception:
                         pass
                     task_lanes.pop(t, None)
-            if hitl_task is not None:
-                hitl_task.cancel()
-                await asyncio.gather(hitl_task, return_exceptions=True)
+            await _stop_supervisor_tasks()
             if self._shutdown_owners_incomplete():
                 # Do not close the graph or emit a false terminal lifecycle while a
                 # fenced handler still owns an in-flight mutation. The orphan set on

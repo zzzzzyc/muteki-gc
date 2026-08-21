@@ -57,6 +57,7 @@ class EventType(str, Enum):
     STALLED = "guard.stalled"
     GUIDANCE_INJECTED = "coordinator.guidance"
     HITL_REQUEST = "hitl.request"  # agent asks a human to decide
+    HITL_RESOLVED = "hitl.resolved"  # a pending HITL request was cleared (not a human reply)
     HITL_RESPONSE = "hitl.response"  # human issues a command / interrupt
     CONTROL_COMMAND = "control.command"  # durable command lifecycle / observed effect
     HITL_TRANSLATED = "hitl.translated"  # a zh translation of a worker's hand-raise
@@ -231,6 +232,17 @@ def hitl_request_payload(worker: str, need: str, *, kind: str = "need_input",
     rid = str(request_id or hitl_request_id(worker, need, need_kind))
     return {"request_id": rid, "id": rid, "worker": worker, "need": need,
             "kind": kind, **fields}
+
+
+def hitl_resolved_payload(
+    request_id: str,
+    *,
+    worker: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Clear one outstanding HITL card without inventing a human response."""
+    rid = str(request_id)
+    return {"request_id": rid, "id": rid, "worker": worker, "reason": reason}
 
 
 def solve_graph_delta_payload(kind: str, **fields: Any) -> dict[str, Any]:
