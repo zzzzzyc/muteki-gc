@@ -697,12 +697,14 @@ async def test_coordinator_bootstrap_retries_after_operator_wake_then_health_rac
 
 
 @pytest.mark.asyncio
-async def test_coordinator_bootstrap_wake_without_repair_dedups_hitl(
+async def test_coordinator_bootstrap_wake_without_repair_reraises_hitl(
     tmp_path, monkeypatch,
 ):
     from muteki.solver.gc_bootstrap import GcBootstrapError
 
     attempts = {"n": 0}
+    finished: dict[str, Any] = {}
+    _patch_hanging_watch(monkeypatch, finished)
 
     async def always_fail(*_a, **_k):
         attempts["n"] += 1
@@ -720,15 +722,27 @@ async def test_coordinator_bootstrap_wake_without_repair_dedups_hitl(
 
     bus.add_sink(recorder)
     order: list[str] = []
-    sw = _swarm(_challenge(), tmp_path, bus=bus, race_scout=True)
+    inbox: asyncio.Queue = asyncio.Queue()
+    sw = _swarm(
+        _challenge(), tmp_path, bus=bus, race_scout=True, hitl_inbox=inbox,
+    )
     _forbid_progress(sw, order, monkeypatch)
     task = asyncio.create_task(sw._run_coordinator())
     try:
         await _wait_until(lambda: attempts["n"] >= 1, label="first fail")
         await _wait_until(
-            lambda: any(h.get("worker") == "gc-bootstrap" for h in sw._pending_help),
+            lambda: any(
+                str(h.get("request_id")) == _BOOTSTRAP_HITL["request_id"]
+                for h in sw._pending_help
+            ),
             label="HITL pending",
         )
+        first_reqs = [
+            ev for ev in captured if ev.event_type is EventType.HITL_REQUEST
+        ]
+        assert len(first_reqs) == 1
+        first_id = str((first_reqs[0].payload or {}).get("request_id") or "")
+        assert first_id == _BOOTSTRAP_HITL["request_id"]
         await bus.emit(Event(
             event_type=EventType.HITL_RESOLVED,
             run_id=sw.run_id,
@@ -740,17 +754,38 @@ async def test_coordinator_bootstrap_wake_without_repair_dedups_hitl(
         ))
         await _wait_until(lambda: attempts["n"] >= 2, label="retry after unrepaired wake")
         await _wait_until(
-            lambda: any(h.get("worker") == "gc-bootstrap" for h in sw._pending_help),
+            lambda: any(
+                str(h.get("request_id")) == _BOOTSTRAP_HITL["request_id"]
+                for h in sw._pending_help
+            ),
             label="HITL pending again",
         )
-        await asyncio.sleep(0.05)
         reqs = [ev for ev in captured if ev.event_type is EventType.HITL_REQUEST]
-        assert len(reqs) == 1
+        assert len(reqs) == 2
+        ids = [str((ev.payload or {}).get("request_id") or "") for ev in reqs]
+        assert ids[0] == ids[1] == _BOOTSTRAP_HITL["request_id"]
+        assert any(
+            str(h.get("request_id")) == _BOOTSTRAP_HITL["request_id"]
+            for h in sw._pending_help
+        )
         assert order == []
         assert not task.done()
-    finally:
+        started = finished.get("started_event")
+        assert started is not None
+        await asyncio.wait_for(started.wait(), timeout=2)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        assert finished.get("cancelled") is True
+        assert finished.get("done") is True
+        assert not [
+            t for t in asyncio.all_tasks()
+            if t.get_name() in {"gc-session-watchdog", "hitl-drain"}
+            and not t.done()
+        ]
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio

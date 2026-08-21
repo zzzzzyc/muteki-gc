@@ -358,24 +358,26 @@ class _CoordinatorLoopMixin:
                 "无法加载 Geocaching listing，请运行 gc auth login "
                 "或检查 GC code"
             )
-            hitl_emitted = False
-            just_woke = False
+            hitl_payload = hitl_request_payload(
+                "gc-bootstrap", need,
+                kind="env_down", need_kind="external_blocker",
+            )
+            request_id = str(hitl_payload.get("request_id") or "")
 
             def _bootstrap_pending() -> bool:
                 return any(
-                    str(h.get("worker", "")) == "gc-bootstrap"
-                    and str(h.get("need", "")).strip() == need
+                    str(h.get("request_id") or h.get("id") or "") == request_id
                     for h in self._pending_help
                 )
 
-            async def _wait_for_operator(*, require_pending: bool) -> None:
+            async def _wait_for_operator() -> None:
                 if self._operator_event is None:
                     raise GcBootstrapError(
                         "geocache listing help channel is unavailable")
                 self._operator_event.clear()
                 if self._operator_stop:
                     raise asyncio.CancelledError
-                if require_pending and not _bootstrap_pending():
+                if not _bootstrap_pending():
                     return
                 await self._operator_event.wait()
                 if self._operator_stop:
@@ -393,38 +395,19 @@ class _CoordinatorLoopMixin:
                 except GcBootstrapError:
                     if self.bus is None:
                         raise
-                    if not hitl_emitted:
+                    if not _bootstrap_pending():
                         await self.bus.emit(Event(
                             event_type=EventType.HITL_REQUEST,
                             run_id=self.run_id,
                             challenge_id=self.challenge.id,
                             solver_id="gc-bootstrap",
-                            payload=hitl_request_payload(
-                                "gc-bootstrap", need,
-                                kind="env_down", need_kind="external_blocker",
-                            ),
+                            payload=dict(hitl_payload),
                         ))
-                        hitl_emitted = True
                     if self._operator_stop:
                         raise asyncio.CancelledError
                     if not _bootstrap_pending():
-                        if just_woke:
-                            # Unrepaired wake: retry already ran. Restore the
-                            # same pending row without a second HITL event,
-                            # then wait again.
-                            just_woke = False
-                            self._pending_help.append(hitl_request_payload(
-                                "gc-bootstrap", need,
-                                kind="env_down", need_kind="external_blocker",
-                            ))
-                            await _wait_for_operator(require_pending=True)
-                            just_woke = True
-                            continue
-                        # Resolved during this attempt — retry immediately.
-                        just_woke = False
                         continue
-                    await _wait_for_operator(require_pending=True)
-                    just_woke = True
+                    await _wait_for_operator()
                     continue
                 if summary:
                     sanitized = {
