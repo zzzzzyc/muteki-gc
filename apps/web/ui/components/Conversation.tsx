@@ -38,6 +38,11 @@ export interface DispatchOpts {
   mode: "ctf" | "pentest" | "geocache";
   goal?: string;
   scope?: string;
+  gcCode?: string;
+  coordSkeleton?: string;
+  digitChecksum?: number;
+  geocheckUrl?: string;
+  anchorRadiusM?: number;
   // collect mode only controls multi-flag collection. Flag format is independent:
   // default brace regex, or explicit token mode for bare-password ladders.
   collect?: boolean;
@@ -94,6 +99,26 @@ function inspectorWidthMax(viewportWidth?: number): number {
 function clampInspectorWidth(width: number, viewportWidth?: number): number {
   const next = Number.isFinite(width) ? width : INSPECTOR_WIDTH_DEFAULT;
   return Math.round(Math.min(inspectorWidthMax(viewportWidth), Math.max(INSPECTOR_WIDTH_MIN, next)));
+}
+
+const CHECKER_HOSTS = new Set([
+  "geocheck.org",
+  "www.geocheck.org",
+  "geotjek.dk",
+  "www.geotjek.dk",
+  "certitude.geocaching.com",
+  "www.certitude.geocaching.com",
+]);
+
+function isAllowedCheckerUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw.trim());
+    if (url.protocol !== "https:") return false;
+    if (url.username || url.password) return false;
+    return CHECKER_HOSTS.has(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
 }
 
 function clock(ts: number): string {
@@ -391,6 +416,10 @@ function StatusHero({ digest, hitlCount, t }: { digest: SwarmDigest; hitlCount: 
     ? (digest.expectedReports > 1
       ? t("hero.results.reportProgress", { n: digest.reports.length, total: digest.expectedReports })
       : t("hero.results.reportCount", { n: digest.reports.length }))
+    : digest.mode === "geocache"
+    ? (digest.expectedFlags > 1
+      ? t("hero.results.coordProgress", { n: digest.flags.length, total: digest.expectedFlags })
+      : t("hero.results.coordCount", { n: digest.flags.length }))
     : (digest.expectedFlags > 1
       ? t("hero.results.progress", { n: digest.flags.length, total: digest.expectedFlags })
       : t("hero.results.count", { n: digest.flags.length }));
@@ -503,7 +532,9 @@ function StatusHero({ digest, hitlCount, t }: { digest: SwarmDigest; hitlCount: 
               aria-expanded={resultsVisible}
               aria-controls="status-flag-results"
               onClick={toggleResults}
-              title={t(resultsVisible ? "hero.results.collapse" : "hero.results.expand")}
+              title={t(resultsVisible
+                ? (digest.mode === "geocache" ? "hero.results.collapseCoords" : "hero.results.collapse")
+                : (digest.mode === "geocache" ? "hero.results.expandCoords" : "hero.results.expand"))}
             >
               <span className="sh-results-count">{resultCount}</span>
               {digest.flags[0] && <code className="sh-results-preview">{digest.flags[0]}</code>}
@@ -536,9 +567,9 @@ function StatusHero({ digest, hitlCount, t }: { digest: SwarmDigest; hitlCount: 
         </span>
       </div>
       {resultsVisible && (
-        <section id="status-flag-results" className="sh-results-panel" aria-label={digest.mode === "pentest" ? t("hero.results.reportTitle") : t("hero.results.title")}>
+        <section id="status-flag-results" className="sh-results-panel" aria-label={digest.mode === "pentest" ? t("hero.results.reportTitle") : digest.mode === "geocache" ? t("hero.results.coordTitle") : t("hero.results.title")}>
           <header className="sh-results-head">
-            <span><Icon name={digest.mode === "pentest" ? "list" : "flag"} size={13} /> {digest.mode === "pentest" ? t("hero.results.reportTitle") : t("hero.results.title")}</span>
+            <span><Icon name={digest.mode === "pentest" ? "list" : "flag"} size={13} /> {digest.mode === "pentest" ? t("hero.results.reportTitle") : digest.mode === "geocache" ? t("hero.results.coordTitle") : t("hero.results.title")}</span>
             <span>{resultCount}</span>
           </header>
           <div className="sh-results-list">
@@ -866,9 +897,14 @@ function Composer({
   }, []);
   const [dragOver, setDragOver] = useState(false);
   const [webSearch, setWebSearch] = useState(true);
-  const [mode, setMode] = useState<"ctf" | "pentest">("ctf");
+  const [mode, setMode] = useState<"ctf" | "pentest" | "geocache">("ctf");
   const [goal, setGoal] = useState("");
   const [scope, setScope] = useState("");
+  const [gcCode, setGcCode] = useState("");
+  const [coordSkeleton, setCoordSkeleton] = useState("");
+  const [digitChecksum, setDigitChecksum] = useState("");
+  const [geocheckUrl, setGeocheckUrl] = useState("");
+  const [anchorRadiusM, setAnchorRadiusM] = useState("3200");
   const [collect, setCollect] = useState(false);
   const [collectCount, setCollectCount] = useState("");  // "" = unknown count
   const [flagFormat, setFlagFormat] = useState<"brace" | "token" | "custom">("brace");
@@ -890,7 +926,7 @@ function Composer({
       const saved = window.localStorage.getItem("muteki.webSearch");
       if (saved === "0") setWebSearch(false);
       const m = window.localStorage.getItem("muteki.mode");
-      if (m === "pentest") setMode("pentest");
+      if (m === "pentest" || m === "geocache") setMode(m);
       if (window.localStorage.getItem("muteki.collect") === "1") setCollect(true);
       const savedFlagFormat = window.localStorage.getItem("muteki.flagFormat");
       if (savedFlagFormat === "token" || savedFlagFormat === "custom") setFlagFormat(savedFlagFormat);
@@ -938,7 +974,7 @@ function Composer({
       return nv;
     });
   };
-  const pickMode = (m: "ctf" | "pentest") => {
+  const pickMode = (m: "ctf" | "pentest" | "geocache") => {
     setMode(m);
     try { window.localStorage.setItem("muteki.mode", m); } catch { /* ignore */ }
   };
@@ -957,9 +993,16 @@ function Composer({
     onPrefillConsumed();
   }, [onPrefillConsumed, prefill, started]);
 
+  const normalizedGcCode = gcCode.trim().toUpperCase();
+  const gcCodeOk = /^GC[A-Z0-9]+$/.test(normalizedGcCode);
+  const checkerUrlTrimmed = geocheckUrl.trim();
+  const checkerUrlOk = !checkerUrlTrimmed || isAllowedCheckerUrl(checkerUrlTrimmed);
+  const geocacheReady = gcCodeOk && checkerUrlOk;
+
   const dispatch = async () => {
     const v = text.trim();
-    if (!v) return;
+    if (!v && mode !== "geocache") return;
+    if (mode === "geocache" && !geocacheReady) return;
     const optionalInt = (raw: string) => {
       const parsed = parseInt(raw, 10);
       return Number.isNaN(parsed) ? undefined : parsed;
@@ -976,14 +1019,29 @@ function Composer({
           costBudgetUsd: optionalFloat(costBudgetUsd),
         }
       : {};
-    const dispatched = await onDispatch(v, mode === "pentest"
+    const prompt = mode === "geocache"
+      ? (v || `解答 Geocaching Mystery ${normalizedGcCode}`)
+      : v;
+    const checksumParsed = parseInt(digitChecksum, 10);
+    const geocacheOpts: DispatchOpts | null = mode === "geocache"
+      ? {
+          webSearch, mode: "geocache", containerMode,
+          gcCode: normalizedGcCode,
+          coordSkeleton: coordSkeleton.trim() || undefined,
+          digitChecksum: Number.isNaN(checksumParsed) ? undefined : checksumParsed,
+          geocheckUrl: checkerUrlTrimmed || undefined,
+          anchorRadiusM: optionalFloat(anchorRadiusM) ?? 3200,
+          ...runCaps,
+        }
+      : null;
+    const dispatched = await onDispatch(prompt, geocacheOpts ?? (mode === "pentest"
       ? { webSearch, mode, goal: goal.trim(), scope: scope.trim(),
           collectCount: parseInt(collectCount, 10) || 0, containerMode, ...runCaps }
       : { webSearch, mode: "ctf", collect, containerMode,
           flagFormat,
           flagWrapper: flagFormat === "custom" ? flagWrapper.trim() : undefined,
           collectCount: collect ? (parseInt(collectCount, 10) || 0) : undefined,
-          ...runCaps });
+          ...runCaps }));
     // Intercepted dispatches (open-ended collect confirm) keep the text so
     // "返回填写数量" does not throw the prompt away.
     if (dispatched !== false) setText("");
@@ -1057,6 +1115,12 @@ function Composer({
                 title={t("composer.modePentestTitle")}
                 onClick={() => pickMode("pentest")}
               >{t("composer.modePentest")}</button>
+              <button
+                type="button" role="tab" aria-selected={mode === "geocache"}
+                className={mode === "geocache" ? "on" : ""}
+                title={t("composer.modeGeocacheTitle")}
+                onClick={() => pickMode("geocache")}
+              >{t("composer.modeGeocache")}</button>
             </div>
           </div>
           <textarea
@@ -1080,8 +1144,45 @@ function Composer({
               if (cd.files?.length) { e.preventDefault(); onAddFiles(cd.files); }
               else if (fromItems.length) { e.preventDefault(); onAddFiles(fromItems); }
             }}
-            placeholder={t(mode === "pentest" ? "composer.pentestPlaceholder" : "composer.dispatchPlaceholder")}
+            placeholder={t(mode === "pentest" ? "composer.pentestPlaceholder" : mode === "geocache" ? "composer.gcPlaceholder" : "composer.dispatchPlaceholder")}
           />
+          {mode === "geocache" && (
+            <div className="pentest-fields">
+              <input
+                className="pf-input"
+                value={gcCode}
+                onChange={(e) => setGcCode(e.target.value.toUpperCase())}
+                placeholder={t("composer.gcCodePlaceholder")}
+                autoCapitalize="characters"
+                spellCheck={false}
+              />
+              <input
+                className="pf-input"
+                value={coordSkeleton}
+                onChange={(e) => setCoordSkeleton(e.target.value)}
+                placeholder={t("composer.coordSkeletonPlaceholder")}
+                spellCheck={false}
+              />
+              <NumberField
+                className="collect-count"
+                min={0}
+                allowEmpty
+                value={digitChecksum}
+                onChange={setDigitChecksum}
+                scrubLabel="#"
+                placeholder={t("composer.digitChecksumPlaceholder")}
+                title={t("composer.digitChecksumPlaceholder")}
+                ariaLabel={t("composer.digitChecksumPlaceholder")}
+              />
+              <input
+                className="pf-input"
+                value={geocheckUrl}
+                onChange={(e) => setGeocheckUrl(e.target.value)}
+                placeholder={t("composer.geocheckUrlPlaceholder")}
+                spellCheck={false}
+              />
+            </div>
+          )}
           {mode === "pentest" && (
             <div className="pentest-fields">
               <input className="pf-input" value={goal} onChange={(e) => setGoal(e.target.value)} placeholder={t("composer.goalPlaceholder")} />
@@ -1184,10 +1285,19 @@ function Composer({
               {t("composer.advanced")}
               <Icon name="chevronDown" size={13} className="advanced-chevron" />
             </button>
-            <button className="send" onClick={dispatch} disabled={!text.trim()} title={t("composer.dispatchTitle")} aria-label={t("composer.dispatchTitle")}><Icon name="send" size={15} /></button>
+            <button className="send" onClick={dispatch} disabled={mode === "geocache" ? !geocacheReady : !text.trim()} title={t("composer.dispatchTitle")} aria-label={t("composer.dispatchTitle")}><Icon name="send" size={15} /></button>
           </div>
           {advancedOpen && (
             <div id="dispatch-advanced-controls" className="composer-advanced-panel">
+              {mode === "geocache" && (
+                <label className="advanced-field advanced-metric-field">
+                  <span>{t("composer.anchorRadius")}</span>
+                  <NumberField className="collect-count" min={1} max={3200} value={anchorRadiusM}
+                    onChange={(v) => { setAdvancedTouched(true); setAnchorRadiusM(v); }}
+                    suffix="m"
+                    title={t("composer.anchorRadiusTitle")} />
+                </label>
+              )}
               {mode === "ctf" && (
                 <label className="advanced-field flag-format-field">
                   <span>{t("composer.flagFormat")}</span>

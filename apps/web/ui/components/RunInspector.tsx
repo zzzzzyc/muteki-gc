@@ -430,6 +430,7 @@ export function RunInspector({
     .slice()
     .sort((a, b) => reportStatusRank(a.status) - reportStatusRank(b.status) || a.ts - b.ts);
   const pentest = deck.mode === "pentest";
+  const geocache = deck.mode === "geocache";
   const reportCollectionTitle = deck.challengeName ? `${deck.challengeName} 漏洞报告集` : "漏洞报告集";
   const workerSiblings = useMemo(
     () => workerIds(deck).map((id) => toWorkerIdentity(id, deck.lanes[id])),
@@ -659,7 +660,7 @@ export function RunInspector({
         </div>
       ))}
       <section className={`insp-sec insp-sec-outcome ${sectionOpen("outcome") ? "" : "collapsed"}`}>
-        {sectionHeader("outcome", t(pentest ? "insp.run.reports" : "insp.run.flag"), pentest ? (
+        {sectionHeader("outcome", t(pentest ? "insp.run.reports" : geocache ? "insp.run.coord" : "insp.run.flag"), pentest ? (
           deck.expectedFindings > 1 ? (
             <span className="insp-flag-count">
               {acceptedReports.length}/{deck.expectedFindings}

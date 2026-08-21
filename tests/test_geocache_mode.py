@@ -400,3 +400,19 @@ def test_geocache_listing_uses_effective_anchor_radius():
     assert "3200" in default
     assert "3.2 km" in default
     assert "1.5 km" not in default
+
+
+def test_infer_uppercases_gc_code_without_changing_mode():
+    from apps.web.drivers import _infer_challenge
+
+    body = _infer_challenge({
+        "kind": "swarm",
+        "prompt": "解 gc8abcd",
+        "challenge": {
+            "mode": "geocache",
+            "description": "解 gc8abcd",
+            **{**_GC_FIELDS, "gc_code": "gc8abcd"},
+        },
+    })
+    assert body["challenge"]["mode"] == "geocache"
+    assert body["challenge"]["gc_code"] == "GC8ABCD"

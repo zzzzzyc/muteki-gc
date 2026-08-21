@@ -1675,6 +1675,14 @@ function Deck() {
       }
     } else if (opts?.mode === "geocache") {
       challenge.mode = "geocache";
+      if (opts.gcCode) challenge.gc_code = opts.gcCode;
+      if (opts.coordSkeleton) challenge.coord_skeleton = opts.coordSkeleton;
+      if (opts.digitChecksum != null) challenge.digit_checksum = opts.digitChecksum;
+      if (opts.geocheckUrl) {
+        challenge.geocheck_url = opts.geocheckUrl;
+        challenge.verifier_rate_limited = true;
+      }
+      if (opts.anchorRadiusM != null) challenge.anchor_radius_m = opts.anchorRadiusM;
     } else {
       if (opts?.flagFormat === "token") {
         challenge.flag_format = "token";

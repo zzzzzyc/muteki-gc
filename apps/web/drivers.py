@@ -29,6 +29,7 @@ from apps.web.worker_config import (
     backend_for_profile,
     resolve_worker_backend,
 )
+from muteki.solver.gc_urls import normalize_geocache_fields
 from muteki.solver.credential_accounts import account_store_root
 from muteki.core.runtime_env import is_web_container
 from muteki.solver.worker_profiles import (
@@ -403,14 +404,16 @@ def _flag_format_fields(ch: dict[str, Any], body: dict[str, Any]) -> tuple[str, 
 
 def _geocache_challenge_kwargs(ch: dict[str, Any]) -> dict[str, Any]:
     """Pass-through GC listing fields from an existing challenge dict."""
-    radius = ch.get("anchor_radius_m")
+    normalized = normalize_geocache_fields(dict(ch))
+    merged = {**ch, **normalized}
+    radius = merged.get("anchor_radius_m")
     return {
-        "gc_code": ch.get("gc_code") or "",
-        "posted_lat": ch.get("posted_lat"),
-        "posted_lon": ch.get("posted_lon"),
-        "coord_skeleton": ch.get("coord_skeleton") or "",
-        "digit_checksum": ch.get("digit_checksum"),
-        "geocheck_url": ch.get("geocheck_url") or "",
+        "gc_code": merged.get("gc_code") or "",
+        "posted_lat": merged.get("posted_lat"),
+        "posted_lon": merged.get("posted_lon"),
+        "coord_skeleton": merged.get("coord_skeleton") or "",
+        "digit_checksum": merged.get("digit_checksum"),
+        "geocheck_url": merged.get("geocheck_url") or "",
         "anchor_radius_m": 3200.0 if radius is None else radius,
     }
 
@@ -441,6 +444,8 @@ def _infer_challenge(body: dict[str, Any]) -> dict[str, Any]:
     raw_mode = body.get("mode") or ch.get("mode")
     if raw_mode:
         ch["mode"] = normalize_challenge_mode(raw_mode)
+    if ch.get("mode") == "geocache":
+        ch.update(normalize_geocache_fields(ch))
     if ch.get("mode") == "geocache" and str(ch.get("geocheck_url") or "").strip():
         ch["verifier_rate_limited"] = True
     prompt = (body.get("prompt") or ch.get("description") or "").strip()

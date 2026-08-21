@@ -25,7 +25,8 @@ if TYPE_CHECKING:
 from muteki.core.cost import CostController
 from muteki.core.event_bus import EventBus
 from muteki.core.runtime_env import is_web_container
-from muteki.core.events import Event, EventType, blackboard_delta_payload
+from muteki.core.events import Event, EventType, blackboard_delta_payload, hitl_request_payload
+from muteki.solver.gc_bootstrap import GcBootstrapError, bootstrap_gc_challenge
 from muteki.solver.gc_session_watchdog import watch_gc_session
 from muteki.core.llm import LLMClient, ModelSpec
 from muteki.models.solve_graph import Challenge
@@ -152,7 +153,7 @@ class _CoordinatorLoopMixin:
                     need_text = str(payload.get("need", "")).strip()
                     worker = str(payload.get("worker", ""))
                     if not (
-                        worker == "gc-session-watchdog"
+                        worker in {"gc-session-watchdog", "gc-bootstrap"}
                         and need_kind == "external_blocker"
                     ):
                         need_kind = self._rechecked_need_kind(need_text, need_kind)
@@ -350,6 +351,46 @@ class _CoordinatorLoopMixin:
 
         supervisor_tasks = [t for t in (hitl_task, watchdog_task) if t is not None]
 
+        async def _bootstrap_geocache_listing() -> None:
+            if getattr(self.challenge, "mode", "") != "geocache":
+                return
+            if not str(getattr(self.challenge, "gc_code", "") or "").strip():
+                return
+            if self.shared_graph is None:
+                return
+            try:
+                summary = await bootstrap_gc_challenge(
+                    self.challenge, self.shared_graph)
+            except GcBootstrapError:
+                if self.bus is None:
+                    return
+                need = (
+                    "无法加载 Geocaching listing，请运行 gc auth login "
+                    "或检查 GC code"
+                )
+                await self.bus.emit(Event(
+                    event_type=EventType.HITL_REQUEST,
+                    run_id=self.run_id,
+                    challenge_id=self.challenge.id,
+                    solver_id="gc-bootstrap",
+                    payload=hitl_request_payload(
+                        "gc-bootstrap", need,
+                        kind="env_down", need_kind="external_blocker",
+                    ),
+                ))
+                return
+            if not summary:
+                return
+            sanitized = {
+                key: summary[key]
+                for key in (
+                    "code", "name", "posted", "difficulty", "terrain",
+                    "skeleton", "checker_url", "facts_added",
+                )
+                if key in summary
+            }
+            await self._emit_coord_bb("gc_bootstrap_complete", **sanitized)
+
         async def _stop_supervisor_tasks() -> None:
             for task in supervisor_tasks:
                 task.cancel()
@@ -429,6 +470,7 @@ class _CoordinatorLoopMixin:
                 pass
 
         try:
+            await _bootstrap_geocache_listing()
             healthy = await self._healthy_engines_async()
         except BaseException:
             await _abort_preloop_acquisitions()

@@ -1249,8 +1249,12 @@ def create_app(manager: Optional[RunManager] = None) -> FastAPI:
     async def start_run(run_id: str, request: Request) -> Any:
         body = await _require_dict_body(request)
         from apps.web.drivers import build_driver
+        from muteki.solver.gc_urls import GeocacheFieldError
 
-        driver = build_driver(body, mgr=app.state.manager)
+        try:
+            driver = build_driver(body, mgr=app.state.manager)
+        except GeocacheFieldError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         from muteki.core.path_ids import RunIdPathError
         try:
             run = app.state.manager.get(run_id) or app.state.manager.create(run_id)
