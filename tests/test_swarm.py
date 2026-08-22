@@ -2038,6 +2038,117 @@ def test_pick_engine_three_engines_heterogeneity():
     )
 
 
+# ── verifier seat: opt-in role + retirement releases its resource locks ──────
+
+
+def test_verifier_role_is_opt_in_not_auto_added():
+    """run-1994: auto-adding the verifier role to every ordinary seat let a
+    slow/free-tier seat absorb verifier intents (flash verifier timed out in
+    three straight generations). Ordinary roles stay ordinary; verifier must
+    be explicit."""
+    from muteki.solver.worker_profiles import (
+        DEFAULT_ROLES, normalize_worker_profile,
+    )
+
+    assert "verifier" not in DEFAULT_ROLES
+    profile = normalize_worker_profile({
+        "name": "oc-flash", "engine": "opencode", "transport": "opencode",
+        "roles": ["race", "bootstrap", "explore", "respond"],
+    })
+    assert profile is not None
+    assert "verifier" not in profile["roles"]
+    assert "review" in profile["roles"]  # review auto-append unchanged
+    explicit = normalize_worker_profile({
+        "name": "verifier-seat", "engine": "cursor", "transport": "cursor_agent",
+        "roles": ["verifier"],
+    })
+    assert explicit is not None and "verifier" in explicit["roles"]
+
+
+def test_verifier_seat_configured_detection(challenge, tmp_path):
+    sw = _coordinator_swarm(challenge, tmp_path)
+    # legacy mode (no worker profiles): every healthy engine is verifier-capable
+    sw.worker_profiles = []
+    assert sw._verifier_seat_configured() is True
+    sw.worker_profiles = [{
+        "id": "oc-flash", "name": "oc-flash", "engine": "opencode",
+        "roles": ["race", "explore", "review"], "enabled": True,
+    }]
+    assert sw._verifier_seat_configured() is False
+    sw.worker_profiles[0]["roles"].append("verifier")
+    assert sw._verifier_seat_configured() is True
+    sw.worker_profiles[0]["enabled"] = False
+    assert sw._verifier_seat_configured() is False
+
+
+def test_select_verifier_engine_rejects_when_no_verifier_seat(challenge, tmp_path):
+    sw = _coordinator_swarm(
+        challenge, tmp_path,
+        worker_profiles=[{
+            "id": "oc-flash", "name": "oc-flash", "engine": "opencode",
+            "transport": "opencode",
+            "roles": ["race", "explore", "review"], "enabled": True,
+        }],
+    )
+    sw.verifier_policy = {"engine": "", "allow_verifier_fallback": False}
+    with pytest.raises(RuntimeError):
+        sw._select_verifier_engine(["opencode"])
+
+
+def test_select_verifier_engine_uses_pinned_seat(challenge, tmp_path):
+    sw = _coordinator_swarm(
+        challenge, tmp_path,
+        worker_profiles=[
+            {
+                "id": "oc-flash", "name": "oc-flash", "engine": "opencode",
+                "transport": "opencode",
+                "roles": ["race", "explore", "review"], "enabled": True,
+            },
+            {
+                "id": "cursor-verifier", "name": "cursor-verifier",
+                "engine": "cursor", "transport": "cursor_agent",
+                "roles": ["verifier"], "enabled": True,
+            },
+        ],
+    )
+    sw.verifier_policy = {"engine": "cursor-verifier",
+                          "allow_verifier_fallback": False}
+    assert sw._select_verifier_engine(["opencode", "cursor"]) == "cursor-verifier"
+
+
+def test_retirement_releases_held_resource_locks(challenge, tmp_path):
+    """A timed-out verifier must not keep verifier:geocheck@<gc> until lease
+    expiry (run-1994: three verifier timeouts → every sibling claim LOST, and
+    the run stalled on a 'wait for verifier release' HITL)."""
+    from types import SimpleNamespace
+
+    sw = _coordinator_swarm(challenge, tmp_path)
+    sid = "cli-verifier-dead"
+    acquired = sw.shared_graph.request_resource_lock(
+        actor=sid, resource_key="verifier:geocheck@GC8ABCD",
+        risk_class="rate-limited", owner_worker=sid, lease_s=600)
+    assert acquired["acquired"]
+    assert sw.shared_graph.active_resource_locks()
+
+    worker = SimpleNamespace(
+        solver_id=sid,
+        _muteki_account_retired=False,
+        _muteki_contexts_released=True,
+        _pending_control_context_reservations=[],
+        _runtime_process_started=True,
+        _control_context_delivery_committed=False,
+        _control_context_delivery_unknown=False,
+    )
+    ok = sw._finish_worker_retirement(worker, intent_id="", reason="timeout")
+    assert ok is True
+    assert sw.shared_graph.active_resource_locks() == []
+    # a sibling can take the lock immediately after the dead owner's retirement
+    again = sw.shared_graph.request_resource_lock(
+        actor="cli-verifier-2", resource_key="verifier:geocheck@GC8ABCD",
+        risk_class="rate-limited", owner_worker="cli-verifier-2", lease_s=600)
+    assert again["acquired"]
+
+
 # ── operator runtime worker control (spawn/kill a specific engine) ───────────
 
 

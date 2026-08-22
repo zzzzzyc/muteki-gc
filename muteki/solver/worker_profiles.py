@@ -48,7 +48,7 @@ TRANSPORT_TO_ENGINE = {
     "dsh_sdk_worker": "dsh",
     "dsh-sdk-worker": "dsh",
 }
-DEFAULT_ROLES = ["race", "bootstrap", "explore", "respond", "review", "verifier"]
+DEFAULT_ROLES = ["race", "bootstrap", "explore", "respond", "review"]
 
 
 def coerce_nonneg_int(value: Any, default: int) -> int:
@@ -130,8 +130,10 @@ def normalize_worker_profile(item: dict[str, Any], *, reject_invalid: bool = Fal
     elif any(r in roles for r in ("race", "bootstrap", "explore", "respond")):
         if "review" not in roles:
             roles = [*roles, "review"]
-        if "verifier" not in roles:
-            roles = [*roles, "verifier"]
+        # verifier is deliberately NOT auto-added: it is an opt-in seat role
+        # (UI: 设为 Verifier Worker / 独立配置). Auto-adding it let any slow or
+        # free-tier seat absorb verifier intents (run-1994: a flash seat timed
+        # out as verifier in three straight generations).
     credential_mode = str(
         item.get("credential_mode") or item.get("auth") or "subscription"
     ).strip() or "subscription"

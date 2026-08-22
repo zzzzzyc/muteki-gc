@@ -539,7 +539,12 @@ class WorkerConfigStore:
                     for p in worker_profiles
                     if "verifier" in (p.get("roles") or [])
                 ),
-                engines[0] if engines else DEFAULT_VERIFIER_POLICY["engine"],
+                # No verifier-capable seat → stay UNCONFIGURED ("") rather than
+                # falling back to an arbitrary ordinary seat. The UI shows
+                # 待配置 and dispatch skips verifier intents until the operator
+                # pins a seat; silently substituting engines[0] put slow/free
+                # seats on the verifier lane (run-1994).
+                DEFAULT_VERIFIER_POLICY["engine"],
             )
         verifier["engine"] = verifier_engine
         overrides: dict[str, Any] = {}

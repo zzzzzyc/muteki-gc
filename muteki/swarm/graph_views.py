@@ -24,6 +24,7 @@ from muteki.swarm.graph_defs import (  # noqa: F401
     EV_FACT_ADDED, EV_HYP_PROPOSED, EV_HYP_REFUTED, EV_DEAD_END,
     EV_INTENT_PROPOSED, EV_INTENT_CLAIMED, EV_INTENT_CONCLUDED,
     EV_FLAG_FOUND, EV_FLAG_INVALIDATED,     EV_FINDING_FOUND, EV_FINDING_INVALIDATED,
+    EV_FLAG_SUBMISSION, EV_FLAG_SUBMISSION_DECISION,
     EV_REPORT_SUBMITTED, EV_REPORT_REJECTED, EV_REPORT_REPRO_DECISION,
     EV_REPORT_VALUE_DECISION, EV_REPORT_ACCEPTED,
     EV_POC_SAVED, EV_POC_CLAIMED, EV_POC_CONCLUDED,
@@ -80,6 +81,49 @@ class _QueriesViewsMixin:
                 bad = None
             if bad:
                 out.add(str(bad))
+        return out
+
+    def checker_rejected_coords(self) -> set[str]:
+        """Coordinates the host-run external checker DEFINITIVELY rejected.
+
+        Joins flag_submission_decision (code=coord_candidate_checker_rejected)
+        back to the coord text of the matching flag_submission event. Read-only;
+        feeds the geocache Known-BAD coordinates block so a respawned worker
+        never re-submits a checker-FAILED coordinate (run-1994 reopened three
+        times re-submitting the same two)."""
+        out: set[str] = set()
+        with self._lock:
+            decision_rows = self._conn.execute(
+                "SELECT payload FROM events WHERE challenge_id=? AND kind=?",
+                (self.challenge.id, EV_FLAG_SUBMISSION_DECISION),
+            ).fetchall()
+            rejected_ids: set[str] = set()
+            for (payload,) in decision_rows:
+                try:
+                    row = json.loads(payload) or {}
+                except Exception:
+                    continue
+                if str(row.get("code") or "") != "coord_candidate_checker_rejected":
+                    continue
+                submission_id = str(row.get("submission_id") or "")
+                if submission_id:
+                    rejected_ids.add(submission_id)
+            if not rejected_ids:
+                return out
+            submission_rows = self._conn.execute(
+                "SELECT payload FROM events WHERE challenge_id=? AND kind=?",
+                (self.challenge.id, EV_FLAG_SUBMISSION),
+            ).fetchall()
+        for (payload,) in submission_rows:
+            try:
+                row = json.loads(payload) or {}
+            except Exception:
+                continue
+            if str(row.get("submission_id") or "") not in rejected_ids:
+                continue
+            coord = str(row.get("coord") or "").strip()
+            if coord:
+                out.add(coord)
         return out
 
     def events(self) -> list[dict]:

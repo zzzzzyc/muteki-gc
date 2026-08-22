@@ -70,6 +70,10 @@ python3 coord_calc.py convert "<coord>" --to dd
 python3 blackboard.py submit-coord '<candidate>'
 ```
 
+**每次提交前先 `read-deadends` 和 `read-facts`。** 已被 checker 判 FAIL 或被 Operator
+标记误报的坐标（Known-BAD coordinates）禁止再次提交或重新推导；你的推导若又回到
+这些坐标，说明这条解读轴是死路，写 `mark-deadend` 并换轴。
+
 本地算出并被本机接受的 candidate **不会结束任务**。checksum 或 Muteki host 的 checker 核验通过后才算 verified。
 listing **没有 checksum / checker** 时：提交有证据的 candidate，并告诉操作员等待
 `/verify_coord <normalized-coordinate>`。**不要** 调用、模拟或伪造该操作员命令。
@@ -78,7 +82,7 @@ listing **没有 checksum / checker** 时：提交有证据的 candidate，并�
 ## GeoCheck 限流锁
 
 若 listing 带 `geocheck_url`，在 `submit-coord` 之前先打印 `READY_TO_SUBMIT=<coord>` 并独占领取，结束后释放。
-**不要运行 gc check** — Muteki host 只提交一次。
+**不要运行 gc check**，也不要自己打开 checker 网站（geocheck.org / geotjek.dk / certitude）— Muteki host 只提交一次。
 
 ```
 python3 blackboard.py claim-resource "verifier:geocheck@<gc_code>" --risk-class rate-limited

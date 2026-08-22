@@ -100,4 +100,8 @@ directives / review / deadends，再读 facts / routes / branches。死路表示
 `FOUND_FLAG`。本地接受的 candidate 不会结束任务。若存在 `geocheck_url`，打印
 `READY_TO_SUBMIT=<coord>`，在 `submit-coord` 前领取
 `verifier:geocheck@<gc_code>`（`--risk-class rate-limited`），结束后释放。
-不要运行 gc check；由 Muteki host 只提交一次。
+不要运行 gc check；由 Muteki host 只提交一次。也不要自己打开 checker 网站
+（geocheck.org / geotjek.dk / certitude）。
+每次 `submit-coord` 之前先 `read-deadends`：已被 checker 判 FAIL 或被 Operator
+标记误报的坐标（Known-BAD coordinates）禁止再次提交或重新推导；命中即写 DEADEND
+并更换解读轴。
