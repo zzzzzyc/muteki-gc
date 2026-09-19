@@ -151,3 +151,29 @@ Worker 通过 `skills/muteki-blackboard/blackboard.py` 访问共享图，数据�
 `docker/worker/AGENTS.md` 是完整版和 slim Worker 共用的说明来源。修改后，
 `docker/worker-slim/build.sh` 会把它复制到 slim 构建上下文。不要单独维护被忽略的
 `docker/worker-slim/AGENTS.md`。
+
+## Cursor Cloud specific instructions
+
+这些是给未来 Cloud Agent 的运行提示；启动脚本（`.cursor/install.sh`）已经在 VM 启动时跑过，
+所以这里只记录非显而易见的运行注意事项，不重复安装步骤。
+
+- **环境类型**：仓库自带 `.cursor/environment.json`（default image + `install` 脚本），
+  非 Dockerfile / snapshot。启动装的依赖由 `.cursor/install.sh` 负责：libzbar0、uv、
+  `uv sync --extra dev`、`apps/web/ui` 的 `npm install`。`uv` 落在 `~/.local/bin`，
+  非登录 shell 里先 `export PATH="$HOME/.local/bin:$PATH"` 再用 `uv`（`run.sh`/`init.sh`
+  会自己补 PATH）。
+- **启动 Web 命令台**：由 `environment.json` 的 `web-deck` 终端跑 `./run.sh web`，
+  后端 FastAPI 在 `:8000`、生产 Next UI 在 `:3001`（loopback），打开
+  `http://127.0.0.1:3001`。首次启动会**生产构建** Next UI（较慢，约 40s+）；改了
+  UI 代码或后端地址后用 `./run.sh web --rebuild-ui` 重建，否则会命中旧的 `.next` 缓存。
+- **真正跑通一道题需要外部凭据，Cloud VM 默认没有**：九类引擎 CLI 均未安装、也未登录。
+  这种情况下 `POST /api/runs/{id}/start` 会正常创建 run、解析题目、进入 preflight，然后
+  以 `reason=preflight_failed` / `failure_code=profile_unhealthy`（`preflight_binding_failed`，
+  「账号 … 未登记」）结束——这是缺凭据的预期行为，不是代码 bug。要实际求解需配置
+  `MUTEKI_DEEPSEEK_API_KEY`（Reason 规划器）并在 Worker 设置里登记至少一个引擎账号 / 在
+  host 上安装并登录对应引擎 CLI（local 后端会继承 host CLI 登录）。
+- **Python 测试**：`uv run pytest -q --ignore=tests/test_kit_pwn.py`（pwn 测试依赖 pwntools，
+  需 `MUTEKI_RUN_PWN_TESTS=1` 显式开启）。UI 类型检查：`( cd apps/web/ui && npx tsc --noEmit )`。
+- **Go supervisor 测试跑不了很正常**：`cmd/runtime-agent/go.mod` 要求 `go 1.26`，VM 只有
+  go1.22 且工具链自动下载被网络策略挡住（`toolchain not available`）。该 Go 组件只在
+  构建容器内 Worker 镜像时需要，与 Web 命令台开发无关，可跳过。
